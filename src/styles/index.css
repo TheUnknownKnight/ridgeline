@@ -1,0 +1,421 @@
+:root {
+  --bg-primary: #1a1a2e;
+  --bg-surface: #20203a;
+  --bg-elevated: #2a2a4a;
+  --bg-hover: #33335a;
+  --text-primary: #e8dcc8;
+  --text-secondary: #9a9478;
+  --text-dim: #6b6855;
+  --accent-moss: #4a7c59;
+  --accent-moss-dim: rgba(74, 124, 89, 0.15);
+  --accent-rust: #c4603c;
+  --accent-brick: #8b2500;
+  --accent-amber: #d4a843;
+  --accent-ice: #5b8fa8;
+  --border: rgba(255, 255, 255, 0.06);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body, html {
+  width: 100%; height: 100%;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  overflow: hidden;
+}
+
+#app-container {
+  display: flex;
+  width: 100vw; height: 100vh;
+}
+
+/* ── Sidebar ── */
+.sidebar {
+  width: 420px; min-width: 420px;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  height: 100%; z-index: 10;
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
+}
+
+.sidebar-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.logo-row {
+  display: flex; align-items: center; gap: 10px;
+}
+
+/* ── Import Zone ── */
+.import-zone {
+  margin: 24px;
+  padding: 40px 24px;
+  border: 2px dashed var(--text-dim);
+  border-radius: 12px;
+  text-align: center;
+  background: var(--bg-primary);
+  cursor: pointer;
+  transition: border-color 0.25s, background 0.25s;
+}
+
+.import-zone:hover, .import-zone.dragover {
+  border-color: var(--accent-moss);
+  background: var(--accent-moss-dim);
+}
+
+.import-icon { margin-bottom: 16px; opacity: 0.6; }
+.import-title { font-weight: 600; margin-bottom: 4px !important; }
+.import-hint { color: var(--text-dim); font-size: 0.85rem; }
+
+.btn-secondary {
+  margin-top: 16px;
+  padding: 8px 20px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: inherit; font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.btn-secondary:hover { background: var(--bg-hover); }
+
+/* ── Loading ── */
+.loading-panel {
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 60px 24px;
+  flex-grow: 1;
+}
+
+.spinner {
+  width: 36px; height: 36px;
+  border: 3px solid var(--bg-elevated);
+  border-top-color: var(--accent-moss);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-bottom: 20px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.loading-text { color: var(--text-secondary); margin-bottom: 16px; }
+
+.loading-sources {
+  display: flex; gap: 8px; flex-wrap: wrap; justify-content: center;
+}
+.source-tag {
+  font-size: 0.7rem; font-family: 'IBM Plex Mono', monospace;
+  padding: 3px 8px;
+  background: var(--bg-elevated); border-radius: 4px;
+  color: var(--text-dim);
+  transition: color 0.3s, background 0.3s;
+}
+.source-tag.active {
+  color: var(--accent-moss); background: var(--accent-moss-dim);
+}
+
+/* ── Map ── */
+#map-container {
+  flex-grow: 1; height: 100%; position: relative;
+}
+
+/* ── Results ── */
+#results-container {
+  flex-grow: 1; overflow-y: auto;
+  padding: 0 24px 24px;
+}
+
+.route-summary {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 16px;
+  display: flex; gap: 16px; align-items: baseline;
+}
+
+.summary-stat {
+  display: flex; flex-direction: column; gap: 2px;
+}
+.summary-stat .stat-value {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 1.3rem; font-weight: 600;
+  color: var(--text-primary);
+}
+.summary-stat .stat-label {
+  font-size: 0.7rem; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--text-dim);
+}
+
+/* ── Delta / Changes ── */
+.section-delta { margin-bottom: 20px; }
+
+.delta-card {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-elevated);
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+.delta-card .delta-icon {
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 700; font-size: 0.8rem;
+  padding: 2px 6px; border-radius: 3px;
+  flex-shrink: 0;
+}
+.delta-card .delta-icon.new {
+  background: rgba(196, 96, 60, 0.2); color: var(--accent-rust);
+}
+.delta-card .delta-icon.cleared {
+  background: var(--accent-moss-dim); color: var(--accent-moss);
+}
+.delta-card .delta-text {
+  font-size: 0.85rem; color: var(--text-primary);
+}
+.delta-card .delta-mile {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.75rem; color: var(--text-dim);
+}
+
+/* ── Segment Cards ── */
+.segment-card {
+  background: var(--bg-elevated);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  border-left: 4px solid var(--accent-moss);
+  transition: background 0.15s;
+  cursor: default;
+}
+.segment-card:hover { background: var(--bg-hover); }
+
+.segment-card.status-danger-severe { border-left-color: var(--accent-brick); }
+.segment-card.status-danger-moderate { border-left-color: var(--accent-amber); }
+
+/* C6 — Dashed left-border on estimated segment cards */
+.segment-card.status-estimated-warning {
+  border-left: none;
+  position: relative;
+}
+.segment-card.status-estimated-warning::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 4px;
+  border-left: 4px dashed var(--accent-rust);
+}
+
+.segment-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 6px;
+}
+
+.hazard-item {
+  margin-top: 10px; padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.hazard-item .hazard-label {
+  margin-top: 6px; font-size: 0.9rem;
+}
+.hazard-item .hazard-detail {
+  margin-top: 4px; font-size: 0.8rem;
+  color: var(--text-dim); font-family: 'IBM Plex Mono', monospace;
+}
+
+/* ── Badges ── */
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
+}
+.badge--official {
+  background: var(--accent-moss); color: #fff;
+}
+.badge--official.warning {
+  background: var(--accent-brick);
+}
+.badge--estimated {
+  border: 1px dashed var(--accent-amber);
+  color: var(--accent-amber);
+  background: rgba(212, 168, 67, 0.08);
+}
+.badge--clear {
+  background: var(--accent-moss-dim); color: var(--accent-moss);
+}
+/* C7 — Distinct badge styles per hazard type */
+.badge--alert {
+  background: var(--accent-amber); color: #1a1a2e;
+}
+.badge--fire {
+  background: var(--accent-brick); color: #fff;
+}
+
+/* ── Utilities ── */
+.hidden { display: none !important; }
+
+/* ── Scrollbar ── */
+#results-container::-webkit-scrollbar { width: 6px; }
+#results-container::-webkit-scrollbar-track { background: transparent; }
+#results-container::-webkit-scrollbar-thumb {
+  background: var(--bg-hover); border-radius: 3px;
+}
+
+/* ── C1+C9 Segmented Mode Toggle ── */
+.mode-toggle-segmented {
+  display: flex; gap: 0;
+  border-radius: 6px; overflow: hidden;
+  border: 1px solid var(--border);
+  margin-left: auto;
+}
+.mode-btn {
+  padding: 6px 16px;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
+  font-size: 0.8rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  background: var(--bg-elevated); color: var(--text-dim);
+  border: none; cursor: pointer;
+  transition: background 0.2s;
+}
+.mode-btn.active {
+  background: var(--accent-moss-dim); color: var(--accent-moss);
+}
+
+/* ── A1 Lookahead Setting ── */
+.lookahead-setting {
+  padding: 12px 0;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.lookahead-label {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 0.85rem; color: var(--text-secondary);
+  cursor: pointer;
+}
+.lookahead-text {
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
+  font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; font-size: 0.75rem;
+  white-space: nowrap;
+}
+.lookahead-val {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.8rem; color: var(--text-primary);
+  min-width: 40px; text-align: right;
+  white-space: nowrap;
+}
+/* Range input theming */
+input[type='range'] {
+  -webkit-appearance: none; appearance: none;
+  flex: 1; height: 4px;
+  background: var(--bg-elevated); border-radius: 2px;
+  outline: none;
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--accent-moss);
+  cursor: pointer;
+  border: 2px solid var(--bg-surface);
+}
+input[type='range']::-moz-range-thumb {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--accent-moss);
+  cursor: pointer;
+  border: 2px solid var(--bg-surface);
+}
+
+/* ── C2 Filter Pills ── */
+.filter-pills {
+  display: flex; gap: 8px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.filter-pill {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 12px; border-radius: 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  font-family: 'IBM Plex Sans Condensed', sans-serif;
+  cursor: pointer; transition: all 0.2s;
+}
+.filter-pill.active {
+  border-color: var(--accent-moss); color: var(--text-primary);
+}
+.filter-pill:not(.active) { opacity: 0.5; }
+.pill-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%; flex-shrink: 0;
+}
+
+/* ── C3 Route Profile ── */
+.route-profile {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+.profile-svg { width: 100%; height: 120px; }
+.profile-legend {
+  display: flex; gap: 16px; margin-top: 8px;
+  font-size: 0.75rem; color: var(--text-dim);
+}
+.legend-item { display: flex; align-items: center; gap: 6px; }
+
+/* ── C5 Delta Card Rework ── */
+.delta-card {
+  padding: 14px 16px;
+  background: var(--bg-elevated);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  border-left: 4px solid var(--accent-amber);
+}
+.delta-card.has-new-hazards { border-left-color: var(--accent-rust); }
+.delta-header {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.7rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--accent-amber); margin-bottom: 8px;
+}
+.delta-body {
+  font-size: 0.85rem; color: var(--text-primary);
+  line-height: 1.5;
+}
+
+/* ── C4 Source Attribution ── */
+.hazard-source {
+  font-size: 0.75rem; color: var(--text-dim);
+  font-family: 'IBM Plex Mono', monospace;
+  margin-top: 4px;
+}
+
+/* ── A2 GPS Fallback Notice ── */
+.gps-fallback-notice {
+  font-size: 0.8rem;
+  font-family: 'IBM Plex Mono', monospace;
+  padding: 8px 12px; margin-bottom: 12px;
+  border-radius: 6px;
+  background: rgba(196, 96, 60, 0.1);
+  border: 1px solid var(--accent-rust);
+  color: var(--accent-rust);
+}
+
+/* ── Sync Status ── */
+.sync-status {
+  font-size: 0.8rem; font-family: 'IBM Plex Mono', monospace;
+  padding: 8px 12px; margin-bottom: 16px;
+  border-radius: 6px; background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.sync-status.stale {
+  border-color: var(--accent-amber);
+  color: var(--accent-amber);
+}

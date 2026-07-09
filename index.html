@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ridgeline — Route Health Check</title>
+  <meta name="description" content="Cross-reference your backcountry route against live hazard data">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/src/styles/typography.css">
+  <link rel="stylesheet" href="/src/styles/index.css">
+</head>
+<body>
+  <div id="app-container">
+    <aside id="sidebar" class="sidebar">
+      <header class="sidebar-header">
+        <div class="logo-row">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M2 20L7 8L12 14L17 4L22 20" stroke="#4a7c59" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <h1>RIDGELINE</h1>
+          <div class="mode-toggle-segmented">
+            <button id="mode-planning" class="mode-btn active">PLANNING</button>
+            <button id="mode-ontrail" class="mode-btn">ON TRAIL</button>
+          </div>
+        </div>
+        <p class="subtitle">Route Health &amp; Hazard Analysis</p>
+      </header>
+
+      <div id="import-zone" class="import-zone">
+        <div class="import-icon">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
+            <path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke="#9a9478" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <p class="import-title">Drop a GPX file here</p>
+        <p class="import-hint">From AllTrails, CalTopo, FarOut, or Gaia GPS</p>
+        <button id="btn-import" class="btn-secondary">Or select file</button>
+        <input type="file" id="file-input" accept=".gpx" style="display: none;" />
+      </div>
+
+      <div id="loading-indicator" class="loading-panel hidden">
+        <div class="spinner"></div>
+        <p class="loading-text">Analyzing route against live data…</p>
+        <div class="loading-sources">
+          <span class="source-tag" id="src-nws">NWS Weather</span>
+          <span class="source-tag" id="src-nifc">NIFC Fire</span>
+          <span class="source-tag" id="src-avy">Avalanche.org</span>
+        </div>
+      </div>
+
+      <div id="results-container" class="hidden">
+        <div id="gps-fallback-notice" class="gps-fallback-notice hidden">
+          ⚠ GPS unavailable — using last known position
+        </div>
+        <div id="sync-status" class="sync-status hidden"></div>
+        <div id="lookahead-setting" class="lookahead-setting hidden">
+          <label class="lookahead-label">
+            <span class="lookahead-text">Lookahead</span>
+            <input type="range" id="lookahead-range" min="5" max="30" value="15" step="1">
+            <span id="lookahead-value" class="lookahead-val">15 mi</span>
+          </label>
+        </div>
+        <div id="route-summary" class="route-summary"></div>
+
+        <div id="filter-pills" class="filter-pills">
+          <button class="filter-pill active" data-type="fire"><span class="pill-dot" style="background: var(--accent-rust)"></span>Fire</button>
+          <button class="filter-pill active" data-type="weather-alert"><span class="pill-dot" style="background: var(--accent-amber)"></span>Weather</button>
+          <button class="filter-pill active" data-type="avalanche"><span class="pill-dot" style="background: var(--accent-ice)"></span>Avalanche</button>
+          <button class="filter-pill active" data-type="snowpack"><span class="pill-dot" style="background: var(--text-secondary)"></span>Snowpack</button>
+        </div>
+
+        <div id="route-profile" class="route-profile hidden"></div>
+
+        <section id="delta-section" class="section-delta hidden">
+          <h2>Since you last checked</h2>
+          <div id="delta-list"></div>
+        </section>
+
+        <section id="segments-section">
+          <h2>Route Segments</h2>
+          <div id="segments-list"></div>
+        </section>
+      </div>
+    </aside>
+    <main id="map-container"></main>
+  </div>
+  <script type="module" src="/src/js/app.js"></script>
+</body>
+</html>

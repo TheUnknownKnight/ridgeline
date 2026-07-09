@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Ridgeline Test">
+  <metadata>
+    <name>JMT Yosemite to Donohue Pass</name>
+  </metadata>
+  <trk>
+    <name>JMT Section 1</name>
+    <trkseg>
+      <!-- Happy Isles -->
+      <trkpt lat="37.7317" lon="-119.5574"><ele>1230</ele></trkpt>
+      <trkpt lat="37.7275" lon="-119.5441"><ele>1450</ele></trkpt>
+      <trkpt lat="37.7240" lon="-119.5332"><ele>1820</ele></trkpt>
+      <!-- Sunrise High Sierra Camp area -->
+      <trkpt lat="37.7551" lon="-119.4312"><ele>2850</ele></trkpt>
+      <trkpt lat="37.8285" lon="-119.3364"><ele>2630</ele></trkpt>
+      <!-- Tuolumne Meadows -->
+      <trkpt lat="37.8761" lon="-119.3662"><ele>2620</ele></trkpt>
+      <!-- Lyell Canyon -->
+      <trkpt lat="37.7984" lon="-119.2612"><ele>2740</ele></trkpt>
+      <!-- Donohue Pass -->
+      <trkpt lat="37.7608" lon="-119.2435"><ele>3370</ele></trkpt>
+    </trkseg>
+  </trk>
+</gpx>
