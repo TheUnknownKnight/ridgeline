@@ -117,26 +117,6 @@ export const renderSegments = (segmentsGeoJSON, activeFilters = null) => {
     (a, b) => a.properties.mileStart - b.properties.mileStart
   );
 
-  // Collapse consecutive clear segments
-  let clearStart = null;
-  let clearEnd = null;
-
-  const flushClear = () => {
-    if (clearStart !== null) {
-      const card = createSegmentCard({
-        properties: {
-          mileStart: clearStart,
-          mileEnd: clearEnd,
-          status: 'clear',
-          hazards: []
-        }
-      });
-      container.appendChild(card);
-      clearStart = null;
-      clearEnd = null;
-    }
-  };
-
   for (const feature of features) {
     const p = feature.properties;
     
@@ -148,15 +128,6 @@ export const renderSegments = (segmentsGeoJSON, activeFilters = null) => {
       }
     }
 
-    if (p.status === 'clear') {
-      if (clearStart === null) {
-        clearStart = p.mileStart;
-      }
-      clearEnd = p.mileEnd;
-    } else {
-      flushClear();
-      container.appendChild(createSegmentCard(feature));
-    }
+    container.appendChild(createSegmentCard(feature));
   }
-  flushClear();
 };

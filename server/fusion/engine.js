@@ -196,7 +196,6 @@ export const runFusion = async (routeGeoJSON, routeId, location = null, lookahea
               detail: `${Math.round(fire.properties?.poly_GISAcres || fire.properties?.GISAcres || 0)} acres, ${fire.properties?.attr_PercentContained || '?'}% contained`
             });
             segment.properties.status = 'danger-severe';
-            break;
           }
         } catch {}
       }
@@ -273,7 +272,6 @@ export const runFusion = async (routeGeoJSON, routeId, location = null, lookahea
             detail: `${Math.round(fire.properties?.poly_GISAcres || fire.properties?.GISAcres || 0)} acres, ${fire.properties?.attr_PercentContained || '?'}% contained`
           });
           segment.properties.status = 'danger-severe';
-          break;
         }
       } catch {}
     }
@@ -372,7 +370,7 @@ export const runFusion = async (routeGeoJSON, routeId, location = null, lookahea
   }
 
   // Filter chunks to lookahead window + overrides
-  chunks.features = chunks.features.filter(segment => {
+  let finalFeatures = chunks.features.filter(segment => {
     const inWindow = segment.properties.mileEnd >= windowStart && segment.properties.mileStart <= windowEnd;
     if (inWindow) return true;
     return segment.properties.hazards.some(h => 
@@ -381,6 +379,39 @@ export const runFusion = async (routeGeoJSON, routeId, location = null, lookahea
       (h.type === 'avalanche' && segment.properties.status === 'danger-severe')
     );
   });
+
+  // Consolidate contiguous segments with identical hazard signatures
+  const consolidated = [];
+  let currentGroup = null;
+
+  const hazardSignature = (seg) => {
+    if (seg.properties.status === 'clear' && seg.properties.hazards.length === 0) return 'clear';
+    const sig = seg.properties.hazards.map(h => `${h.type}|${h.source}|${h.label}|${h.detail}`).sort().join('||');
+    return `${seg.properties.status}::${sig}`;
+  };
+
+  for (const seg of finalFeatures) {
+    const sig = hazardSignature(seg);
+    if (!currentGroup) {
+      currentGroup = { signature: sig, segment: JSON.parse(JSON.stringify(seg)) };
+    } else {
+      if (currentGroup.signature === sig && currentGroup.segment.properties.mileEnd === seg.properties.mileStart) {
+        currentGroup.segment.properties.mileEnd = seg.properties.mileEnd;
+        if (currentGroup.segment.geometry && seg.geometry) {
+          if (currentGroup.segment.geometry.type === 'LineString' && seg.geometry.type === 'LineString') {
+            currentGroup.segment.geometry.coordinates.push(...seg.geometry.coordinates);
+          } else if (currentGroup.segment.geometry.type === 'MultiLineString' && seg.geometry.type === 'LineString') {
+            currentGroup.segment.geometry.coordinates.push(seg.geometry.coordinates);
+          }
+        }
+      } else {
+        consolidated.push(currentGroup.segment);
+        currentGroup = { signature: sig, segment: JSON.parse(JSON.stringify(seg)) };
+      }
+    }
+  }
+  if (currentGroup) consolidated.push(currentGroup.segment);
+  chunks.features = consolidated;
 
   const result = {
     routeId,
