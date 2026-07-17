@@ -7,6 +7,7 @@ import booleanPointInPolygon from '@turf/boolean-point-in-polygon';
 import distance from '@turf/distance';
 import nearestPointOnLine from '@turf/nearest-point-on-line';
 import lineSlice from '@turf/line-slice';
+import { getCached } from '../cache.js';
 import { getNWSForecast } from '../sources/nws.js';
 import { getFires } from '../sources/nifc.js';
 import { getAvalancheMap } from '../sources/avalanche.js';
@@ -151,20 +152,25 @@ export const runFusion = async (routeGeoJSON, routeId, location = null, lookahea
   // hazards outside the window by checking the full route bbox
   let overrideSegments = [];
   if (location) {
-    // Chunk the full route to find segments with severe hazards outside the window
-    const fullChunks = lineChunk(mainLine, 1, { units: 'miles' });
-    for (let idx = 0; idx < fullChunks.features.length; idx++) {
+    // Full-route chunking is route-geometry-dependent, not location-dependent —
+    // identical on every On Trail request for the same route. Cache the raw
+    // geometry once per routeId. Per useClones:false, never mutate the cached
+    // object — rebuild a fresh {geometry, properties} wrapper per segment below.
+    const fullChunksGeom = await getCached(`route-chunks-${routeId}`, 0, async () => {
+      return lineChunk(mainLine, 1, { units: 'miles' });
+    });
+
+    for (let idx = 0; idx < fullChunksGeom.features.length; idx++) {
       const mileStart = idx;
       const mileEnd = idx + 1;
       // Skip segments already within the window (we already have them)
       if (mileEnd >= windowStart && mileStart <= windowEnd) continue;
 
-      const segment = fullChunks.features[idx];
-      segment.properties = segment.properties || {};
-      segment.properties.mileStart = mileStart;
-      segment.properties.mileEnd = mileEnd;
-      segment.properties.hazards = [];
-      segment.properties.status = 'clear';
+      const segment = {
+        type: 'Feature',
+        geometry: fullChunksGeom.features[idx].geometry,
+        properties: { mileStart, mileEnd, hazards: [], status: 'clear' }
+      };
 
       let midpoint;
       try {
