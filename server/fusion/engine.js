@@ -1,489 +1,297 @@
-import bbox from '@turf/bbox';
+import { projectOntoRoute, pointAtMile } from '../../shared/geo.js';
+import { daylight } from '../../shared/sun.js';
+import { SOURCE_KEYS } from '../../shared/levels.js';
+import { getRouteModel, forecastSamples } from './route.js';
+import { createHitTable, consolidate } from './consolidate.js';
+import { buildSummary } from './summary.js';
+import { countVertices } from '../lib/spatial.js';
+import { loadFire } from '../sources/nifc.js';
+import { loadAlerts } from '../sources/nwsAlerts.js';
+import { loadAvalanche } from '../sources/avalanche.js';
+import { loadWater } from '../sources/nwps.js';
+import { inUnitedStatesBbox } from '../sources/usStates.js';
+import { loadForecast } from '../sources/nwsForecast.js';
+import { loadRecentPrecip } from '../sources/openmeteo.js';
+import { loadSmoke } from '../sources/smokeForecast.js';
+import { loadAir } from '../sources/airnow.js';
+import { loadConditions, detectConditions } from './conditions.js';
+import { detectFire } from './detectors/fire.js';
+import { detectAlerts } from './detectors/alerts.js';
+import { detectAvalanche } from './detectors/avalanche.js';
+import { detectWater } from './detectors/water.js';
+import { detectWeather } from './detectors/weather.js';
+import { detectSmoke } from './detectors/smoke.js';
+import { detectAir } from './detectors/air.js';
 
-import length from '@turf/length';
-import along from '@turf/along';
-import lineChunk from '@turf/line-chunk';
-import booleanPointInPolygon from '@turf/boolean-point-in-polygon';
-import distance from '@turf/distance';
-import nearestPointOnLine from '@turf/nearest-point-on-line';
-import lineSlice from '@turf/line-slice';
-import { getCached } from '../cache.js';
-import { getNWSForecast } from '../sources/nws.js';
-import { getFires } from '../sources/nifc.js';
-import { getAvalancheMap } from '../sources/avalanche.js';
-import { saveFusionState } from '../fusion/differ.js';
-
-export const runFusion = async (routeGeoJSON, routeId, location = null, lookaheadMiles = 15) => {
-  const lines = routeGeoJSON.features.filter(
-    f => f.geometry.type === 'LineString' || f.geometry.type === 'MultiLineString'
-  );
-  if (lines.length === 0) throw new Error('No valid route lines found');
-
-  const mainLine = lines[0];
-  const routeBbox = bbox(mainLine);
-  // Pad bounding box by roughly 8km (0.08 degrees) to catch nearby fires, avoiding expensive buffer on massive GPX
-  routeBbox[0] -= 0.08;
-  routeBbox[1] -= 0.08;
-  routeBbox[2] += 0.08;
-  routeBbox[3] += 0.08;
-  const bboxStr = routeBbox.join(',');
-
-  const [firesData, avyData] = await Promise.all([
-    getFires(bboxStr).catch(e => { console.error('Fire fetch error:', e.message); return { type: 'FeatureCollection', features: [] }; }),
-    getAvalancheMap().catch(e => { console.error('Avy fetch error:', e.message); return { type: 'FeatureCollection', features: [] }; })
-  ]);
-
-  const routeLength = length(mainLine, { units: 'miles' });
-  
-  let windowStart = 0;
-  let windowEnd = routeLength;
-  let currentMileMarker = null;
-
-  if (location && typeof location.lat === 'number' && typeof location.lng === 'number') {
-    const userPt = { type: 'Point', coordinates: [location.lng, location.lat] };
-    const nearestPt = nearestPointOnLine(mainLine, userPt, { units: 'miles' });
-    currentMileMarker = nearestPt.properties.location;
-    windowStart = Math.max(0, currentMileMarker - 2);
-    windowEnd = Math.min(routeLength, currentMileMarker + lookaheadMiles);
-  }
-
-  // D5 — Reduce sampled points density:
-  // On-Trail mode: only sample within [windowStart - 5, windowEnd + 5]
-  // Planning mode: increase sampling interval from 3 miles to 5 miles
-  const sampledPoints = [];
-  if (location) {
-    const sampleStart = Math.max(0, windowStart - 5);
-    const sampleEnd = Math.min(routeLength, windowEnd + 5);
-    for (let m = sampleStart; m <= sampleEnd; m += 3) {
-      sampledPoints.push(along(mainLine, m, { units: 'miles' }));
-    }
-  } else {
-    for (let m = 0; m <= routeLength; m += 5) {
-      sampledPoints.push(along(mainLine, m, { units: 'miles' }));
-    }
-  }
-
-  // Filter avy zones to only those near the route
-  const avyPreFilterStart = Date.now();
-  let avyZonesNearRoute = [];
-  if (avyData.features && avyData.features.length > 0) {
-    avyZonesNearRoute = avyData.features.filter(zone => {
-      if (!zone.geometry) return false;
-      try {
-        // Check if any of our pre-computed points fall in the zone
-        for (const pt of sampledPoints) {
-          const [lon, lat] = pt.geometry.coordinates;
-          if (zone.bbox) {
-            if (lon < zone.bbox[0] || lon > zone.bbox[2] || lat < zone.bbox[1] || lat > zone.bbox[3]) {
-              continue;
-            }
-          }
-          if (booleanPointInPolygon(pt, zone)) return true;
-        }
-        return false;
-      } catch {
-        return false;
-      }
-    });
-  }
-  const avyPreFilterTime = Date.now() - avyPreFilterStart;
-  console.log(`[INSTRUMENTATION] avyZonesNearRoute pre-filter took ${avyPreFilterTime} ms`);
-
-  // Sample 3 weather points within the lookahead window
-  const weatherSampleMiles = [windowStart, windowStart + (windowEnd - windowStart) / 2, windowEnd].filter(m => m <= routeLength);
-
-  // D1 — Parallelize weather fetches with Promise.allSettled
-  const weatherSettled = await Promise.allSettled(
-    weatherSampleMiles.map(async (mile) => {
-      const pt = along(mainLine, mile, { units: 'miles' });
-      const [lon, lat] = pt.geometry.coordinates;
-      const forecast = await getNWSForecast(lat, lon);
-      return { point: pt, forecast, mile };
-    })
-  );
-  const weatherResults = weatherSettled
-    .filter(r => r.status === 'fulfilled')
-    .map(r => r.value);
-  // Log any failed weather fetches
-  weatherSettled.forEach((r, i) => {
-    if (r.status === 'rejected') {
-      console.error(`Weather fetch failed for mile ${weatherSampleMiles[i]}:`, r.reason?.message || r.reason);
-    }
-  });
-
-  // D4 — Pre-filter fire features by bbox:
-  // The bounding boxes are pre-computed in nifc.js at cache-time
-  const fireFeaturesWithBbox = (firesData.features || []).map(fire => ({
-    feature: fire,
-    bbox: fire.bbox || (fire.geometry ? bbox(fire) : null)
-  }));
-
-  // D3 — Score only within the window:
-  // In On-Trail mode, slice the mainLine to the lookahead window and only
-  // chunk + score that portion. A separate "override scan" uses a lightweight
-  // bbox check of fire/avy features against the full route bbox.
-  // In Planning mode, score the full route as before.
-  let lineToScore;
-  let chunkMileOffset = 0;
-  if (location) {
-    // Extract the window portion of mainLine using lineSlice
-    const startPt = along(mainLine, windowStart, { units: 'miles' });
-    const endPt = along(mainLine, windowEnd, { units: 'miles' });
-    lineToScore = lineSlice(startPt, endPt, mainLine);
-    chunkMileOffset = windowStart;
-  } else {
-    lineToScore = mainLine;
-    chunkMileOffset = 0;
-  }
-
-  // Chunk the route (or sliced portion) into 1-mile segments
-  const chunks = lineChunk(lineToScore, 1, { units: 'miles' });
-
-  // Adjust mile markers for the offset
-  chunks.features.forEach((segment, idx) => {
-    segment.properties = segment.properties || {};
-    segment.properties.mileStart = Math.floor(chunkMileOffset) + idx;
-    segment.properties.mileEnd = Math.floor(chunkMileOffset) + idx + 1;
-    segment.properties.hazards = [];
-    segment.properties.status = 'clear';
-  });
-
-  // D3 — Override scan: In On-Trail mode, also create segments for fire/avy
-  // hazards outside the window by checking the full route bbox
-  let overrideSegments = [];
-  if (location) {
-    // Full-route chunking is route-geometry-dependent, not location-dependent —
-    // identical on every On Trail request for the same route. Cache the raw
-    // geometry once per routeId. Per useClones:false, never mutate the cached
-    // object — rebuild a fresh {geometry, properties} wrapper per segment below.
-    const fullChunksGeom = await getCached(`route-chunks-${routeId}`, 0, async () => {
-      return lineChunk(mainLine, 1, { units: 'miles' });
-    });
-
-    for (let idx = 0; idx < fullChunksGeom.features.length; idx++) {
-      const mileStart = idx;
-      const mileEnd = idx + 1;
-      // Skip segments already within the window (we already have them)
-      if (mileEnd >= windowStart && mileStart <= windowEnd) continue;
-
-      const segment = {
-        type: 'Feature',
-        geometry: fullChunksGeom.features[idx].geometry,
-        properties: { mileStart, mileEnd, hazards: [], status: 'clear' }
-      };
-
-      let midpoint;
-      try {
-        const segLen = length(segment, { units: 'miles' });
-        midpoint = along(segment, Math.min(0.5, segLen), { units: 'miles' });
-      } catch {
-        continue;
-      }
-
-      const [midLon, midLat] = midpoint.geometry.coordinates;
-
-      // Only check fires (lightweight bbox pre-filter)
-      for (const { feature: fire, bbox: fireBbox } of fireFeaturesWithBbox) {
-        if (!fire.geometry || !fireBbox) continue;
-        // D4 — Fast bbox guard
-        if (midLon < fireBbox[0] || midLon > fireBbox[2] || midLat < fireBbox[1] || midLat > fireBbox[3]) continue;
-        try {
-          if (booleanPointInPolygon(midpoint, fire)) {
-            let typePrefix = "Active Fire";
-            const cat = fire.properties?.attr_IncidentTypeCategory;
-            if (cat === 'RX') typePrefix = "Prescribed Burn in Progress";
-            else if (cat === 'CX') typePrefix = "Incident Complex";
-            else if (cat === 'WF') typePrefix = "Active Wildfire";
-
-            segment.properties.hazards.push({
-              type: 'fire',
-              source: 'OFFICIAL',
-              label: `${typePrefix}: ${fire.properties?.poly_IncidentName || fire.properties?.IncidentName || 'Unknown'}`,
-              detail: `${Math.round(fire.properties?.poly_GISAcres || fire.properties?.GISAcres || 0)} acres, ${fire.properties?.attr_PercentContained || '?'}% contained`
-            });
-            segment.properties.status = 'danger-severe';
-          }
-        } catch {}
-      }
-
-      // Only check severe avy zones
-      for (const zone of avyZonesNearRoute) {
-        if (zone.bbox) {
-          if (midLon < zone.bbox[0] || midLon > zone.bbox[2] || midLat < zone.bbox[1] || midLat > zone.bbox[3]) continue;
-        }
-        try {
-          if (booleanPointInPolygon(midpoint, zone)) {
-            const dangerLevel = zone.properties?.danger_level ?? 0;
-            if (dangerLevel >= 3) {
-              segment.properties.hazards.push({
-                type: 'avalanche',
-                source: 'OFFICIAL',
-                label: `Avalanche: ${(zone.properties?.danger || 'unknown').toUpperCase()} (Level ${dangerLevel}/5)`,
-                detail: zone.properties?.travel_advice || ''
-              });
-              segment.properties.status = 'danger-severe';
-            }
-            break;
-          }
-        } catch {}
-      }
-
-      // Only keep this segment if it has override-worthy hazards
-      if (segment.properties.hazards.length > 0) {
-        overrideSegments.push(segment);
-      }
-    }
-  }
-
-  // Score the windowed (or full) chunks
-  let debugFireChecks = 0;
-  let debugBboxSkips = 0;
-  let debugAvyChecks = 0;
-  const loopStartTime = Date.now();
-
-  for (let idx = 0; idx < chunks.features.length; idx++) {
-    const segment = chunks.features[idx];
-    let midpoint;
-    try {
-      const segLen = length(segment, { units: 'miles' });
-      midpoint = along(segment, Math.min(0.5, segLen), { units: 'miles' });
-    } catch {
-      return;
-    }
-
-    const [midLon, midLat] = midpoint.geometry.coordinates;
-
-    // Fire intersection
-    // D4 — Use pre-computed bbox to skip far-away fire polygons
-    for (const { feature: fire, bbox: fireBbox } of fireFeaturesWithBbox) {
-      if (!fire.geometry || !fireBbox) continue;
-      // Fast bbox guard: skip if midpoint is outside the fire's bounding box
-      if (midLon < fireBbox[0] || midLon > fireBbox[2] || midLat < fireBbox[1] || midLat > fireBbox[3]) {
-        debugBboxSkips++;
-        continue;
-      }
-      debugFireChecks++;
-      try {
-        if (booleanPointInPolygon(midpoint, fire)) {
-          let typePrefix = "Active Fire";
-          const cat = fire.properties?.attr_IncidentTypeCategory;
-          if (cat === 'RX') typePrefix = "Prescribed Burn in Progress";
-          else if (cat === 'CX') typePrefix = "Incident Complex";
-          else if (cat === 'WF') typePrefix = "Active Wildfire";
-
-          segment.properties.hazards.push({
-            type: 'fire',
-            source: 'OFFICIAL',
-            label: `${typePrefix}: ${fire.properties?.poly_IncidentName || fire.properties?.IncidentName || 'Unknown'}`,
-            detail: `${Math.round(fire.properties?.poly_GISAcres || fire.properties?.GISAcres || 0)} acres, ${fire.properties?.attr_PercentContained || '?'}% contained`
-          });
-          segment.properties.status = 'danger-severe';
-        }
-      } catch {}
-    }
-
-    // Avalanche zone intersection
-    for (const zone of avyZonesNearRoute) {
-      if (zone.bbox) {
-        if (midLon < zone.bbox[0] || midLon > zone.bbox[2] || midLat < zone.bbox[1] || midLat > zone.bbox[3]) {
-          continue;
-        }
-      }
-      debugAvyChecks++;
-      try {
-        if (booleanPointInPolygon(midpoint, zone)) {
-          const dangerLevel = zone.properties?.danger_level ?? 0;
-          if (dangerLevel > 0) {
-            segment.properties.hazards.push({
-              type: 'avalanche',
-              source: 'OFFICIAL',
-              label: `Avalanche: ${(zone.properties?.danger || 'unknown').toUpperCase()} (Level ${dangerLevel}/5)`,
-              detail: zone.properties?.travel_advice || ''
-            });
-            if (segment.properties.status !== 'danger-severe') {
-              segment.properties.status = dangerLevel >= 3 ? 'danger-severe' : 'danger-moderate';
-            }
-          }
-          break;
-        }
-      } catch {}
-    }
-
-    // Weather / reasoning layer
-    if (weatherResults.length > 0) {
-      const nearest = weatherResults.reduce((prev, curr) => {
-        const dPrev = distance(midpoint, prev.point);
-        const dCurr = distance(midpoint, curr.point);
-        return dCurr < dPrev ? curr : prev;
-      });
-
-      const precip = nearest.forecast?.forecast?.precipitation || [];
-      let totalPrecipMm = 0;
-      for (const entry of precip.slice(0, 6)) {
-        if (entry && typeof entry.value === 'number') {
-          totalPrecipMm += entry.value;
-        }
-      }
-
-      if (totalPrecipMm > 5) {
-        segment.properties.hazards.push({
-          type: 'mud',
-          source: 'ESTIMATED',
-          label: totalPrecipMm > 15
-            ? 'Likely muddy — elevated creek crossings'
-            : 'Possible mud — recent precipitation',
-          detail: `${totalPrecipMm.toFixed(1)}mm forecast precip (next 36h)`
-        });
-        if (segment.properties.status === 'clear') {
-          segment.properties.status = 'estimated-warning';
-        }
-      }
-
-      // Check for active NWS alerts
-      const alerts = nearest.forecast?.alerts || [];
-      for (const alert of alerts) {
-        segment.properties.hazards.push({
-          type: 'weather-alert',
-          source: 'OFFICIAL',
-          label: alert.properties?.headline || alert.properties?.event || 'Weather Alert',
-          detail: alert.properties?.description?.slice(0, 200) || ''
-        });
-        if (segment.properties.status === 'clear' || segment.properties.status === 'estimated-warning') {
-          segment.properties.status = 'danger-moderate';
-        }
-      }
-    }
-    
-    // Yield event loop every 500 chunks to prevent blocking
-    if (idx > 0 && idx % 500 === 0) {
-      await new Promise(resolve => setImmediate(resolve));
-    }
-  }
-  
-  const loopEndTime = Date.now();
-  console.log(`[INSTRUMENTATION] Intersection Loop Time: ${loopEndTime - loopStartTime} ms`);
-  console.log(`[INSTRUMENTATION] Chunks: ${chunks.features.length}`);
-  console.log(`[INSTRUMENTATION] Fire features checked: ${fireFeaturesWithBbox.length}`);
-  console.log(`[INSTRUMENTATION] BBox Skips: ${debugBboxSkips}`);
-  console.log(`[INSTRUMENTATION] Expensive Fire PointInPolygon checks: ${debugFireChecks}`);
-  console.log(`[INSTRUMENTATION] Expensive Avy PointInPolygon checks: ${debugAvyChecks}`);
-
-  // Merge override segments from the full-route scan
-  if (overrideSegments.length > 0) {
-    chunks.features = chunks.features.concat(overrideSegments);
-    // Sort by mileStart so output is ordered
-    chunks.features.sort((a, b) => a.properties.mileStart - b.properties.mileStart);
-  }
-
-  // Filter chunks to lookahead window + overrides
-  let finalFeatures = chunks.features.filter(segment => {
-    const inWindow = segment.properties.mileEnd >= windowStart && segment.properties.mileStart <= windowEnd;
-    if (inWindow) return true;
-    return segment.properties.hazards.some(h => 
-      h.type === 'fire' || 
-      h.type === 'weather-alert' || 
-      (h.type === 'avalanche' && segment.properties.status === 'danger-severe')
-    );
-  });
-
-  // Consolidate contiguous segments with identical hazard signatures
-  const consolidated = [];
-  let currentGroup = null;
-
-  const hazardSignature = (seg) => {
-    if (seg.properties.status === 'clear' && seg.properties.hazards.length === 0) return 'clear';
-    const sig = seg.properties.hazards.map(h => `${h.type}|${h.source}|${h.label}|${h.detail}`).sort().join('||');
-    return `${seg.properties.status}::${sig}`;
-  };
-
-  for (const seg of finalFeatures) {
-    const sig = hazardSignature(seg);
-    if (!currentGroup) {
-      currentGroup = { signature: sig, segment: JSON.parse(JSON.stringify(seg)) };
-    } else {
-      if (currentGroup.signature === sig && currentGroup.segment.properties.mileEnd === seg.properties.mileStart) {
-        currentGroup.segment.properties.mileEnd = seg.properties.mileEnd;
-        if (currentGroup.segment.geometry && seg.geometry) {
-          if (currentGroup.segment.geometry.type === 'LineString' && seg.geometry.type === 'LineString') {
-            currentGroup.segment.geometry.coordinates.push(...seg.geometry.coordinates);
-          } else if (currentGroup.segment.geometry.type === 'MultiLineString' && seg.geometry.type === 'LineString') {
-            currentGroup.segment.geometry.coordinates.push(seg.geometry.coordinates);
-          }
-        }
-      } else {
-        consolidated.push(currentGroup.segment);
-        currentGroup = { signature: sig, segment: JSON.parse(JSON.stringify(seg)) };
-      }
-    }
-  }
-  if (currentGroup) consolidated.push(currentGroup.segment);
-  chunks.features = consolidated;
-
-  const result = {
-    routeId,
-    timestamp: new Date().toISOString(),
-    segments: chunks,
-    window: { start: windowStart, end: windowEnd, currentMile: currentMileMarker },
-    metadata: {
-      lengthMiles: routeLength.toFixed(1),
-      fireCount: firesData.features?.length || 0,
-      avyZonesHit: avyZonesNearRoute.length,
-      weatherPoints: weatherResults.length
-    }
-  };
-
-  // Save state for diffing on next check
-  try {
-    const previousState = saveFusionState(routeId, result);
-    if (previousState) {
-      result.diff = computeDiff(previousState, result);
-    }
-  } catch (e) {
-    console.error('Differ save error:', e.message);
-  }
-
-  return result;
+export const defaultSources = {
+  loadFire, loadAlerts, loadAvalanche, loadWater, loadAir, loadForecast, loadRecentPrecip, loadSmoke, loadConditions,
 };
 
-function computeDiff(previous, current) {
-  const changes = [];
-  const prevSegments = previous.segments || [];
-  const currSegments = current.segments.features || [];
+// Forecast sampling: dense inside the On-Trail window, capped for long routes in Planning.
+const ON_TRAIL_FORECAST_SPACING = 1;
+const PLANNING_MIN_SPACING = 2;
+const MAX_FORECAST_POINTS = 120;
+// NOAA's air-quality grid is ~5 km; CAMS (the fallback) thins itself to its own ~40 km.
+const MAX_SMOKE_POINTS = 120;
+const MIN_SMOKE_SPACING = 2;
+const MAX_OVERLAY_VERTICES = 60000;
+const OFFICIAL_SOURCES = ['fire', 'alerts', 'avalanche', 'water', 'air'];
 
-  for (const seg of currSegments) {
-    const mile = seg.properties.mileStart;
-    const prevSeg = prevSegments.find(p => p.mileStart === mile);
+const round2 = (n) => Math.round(n * 100) / 100;
 
-    if (!prevSeg) continue;
+// No single upstream may hold the whole analysis hostage. A loader that
+// overruns keeps running in the background (and fills the cache for the next
+// request); this analysis reports it as unavailable.
+const SOURCE_DEADLINE_MS = 20000;
 
-    // New hazards
-    for (const hazard of seg.properties.hazards) {
-      const existed = prevSeg.hazards.some(
-        h => h.type === hazard.type && h.source === hazard.source
-      );
-      if (!existed) {
-        changes.push({
-          type: 'NEW',
-          mile,
-          hazard
-        });
-      }
-    }
+/** A loader must never take the whole analysis down; a crash or overrun becomes an 'error' source. */
+const safeLoad = async (label, fn, ctx, deadlineMs = SOURCE_DEADLINE_MS) => {
+  let timer;
+  const deadline = new Promise(resolve => {
+    timer = setTimeout(() => resolve({
+      status: 'error', fetchedAt: null, message: `${label} did not respond in time`, data: null,
+    }), deadlineMs);
+  });
+  try {
+    return await Promise.race([fn(ctx), deadline]);
+  } catch (err) {
+    console.error(`[engine] ${label} loader crashed:`, err);
+    return { status: 'error', fetchedAt: null, message: `${label} unavailable`, data: null };
+  } finally {
+    clearTimeout(timer);
+  }
+};
 
-    // Cleared hazards
-    for (const prevHazard of prevSeg.hazards) {
-      const stillExists = seg.properties.hazards.some(
-        h => h.type === prevHazard.type && h.source === prevHazard.source
-      );
-      if (!stillExists) {
-        changes.push({
-          type: 'CLEARED',
-          mile,
-          hazard: prevHazard
-        });
-      }
-    }
+const fmtMiles = (m) => (m < 10 ? m.toFixed(1) : String(Math.round(m)));
+
+/** Plain-language notes about what could not be checked, shown with the verdict. */
+const buildCaveats = ({ route, outside, avalancheUnchecked, coverage, window, forecastOk, airUnchecked, smokeOk }) => {
+  const caveats = [];
+  const miles = (set) => [...set].reduce((n, i) => n + (route.chunks[i].end - route.chunks[i].start), 0);
+  if (outside.size) {
+    caveats.push(`${fmtMiles(miles(outside))} mi of this route is outside US data coverage — fires, alerts, avalanche, rivers and the forecast were not checked there.`);
+  }
+  if (avalancheUnchecked.size) {
+    const centers = [...new Set(coverage.filter(c => c.state !== 'off-season' && c.state !== 'info-only').map(c => c.center))];
+    caveats.push(`Avalanche danger isn't rated for ${fmtMiles(miles(avalancheUnchecked))} mi of this route right now${centers.length ? ` — check ${centers.join(', ')}` : ''}.`);
+  }
+  if (airUnchecked?.size) {
+    caveats.push(`Measured air quality isn't available for ${fmtMiles(miles(airUnchecked))} mi of this route (no AirNow monitors close enough)${smokeOk ? ' — the smoke forecast still covers it' : ''}.`);
+  }
+  if (window && forecastOk) {
+    caveats.push(`Forecast hazards were checked for Mi ${fmtMiles(window.start)}–${fmtMiles(window.end)} (your lookahead) over the next 72 hours.`);
+  }
+  return caveats;
+};
+
+const publicSource = (s, extra = {}) => ({
+  status: s.status,
+  fetchedAt: s.fetchedAt || null,
+  message: s.message || '',
+  attribution: s.attribution || '',
+  url: s.url || null,
+  ...extra,
+});
+
+const STATE_TEXT = {
+  'off-season': 'off-season',
+  expired: 'forecast expired, not yet re-issued',
+  'no-forecast': 'no current forecast',
+  'no-rating': 'no danger rating issued',
+  'info-only': 'observations only, no ratings',
+};
+
+const avalancheCoverageMessage = (base, coverage) => {
+  if (!coverage.length) return base;
+  const list = coverage.slice(0, 3).map(c => `${c.zone} (${STATE_TEXT[c.state] || c.state})`).join(', ');
+  const more = coverage.length > 3 ? ` +${coverage.length - 3} more` : '';
+  return `${base}. Not rated on this route: ${list}${more}`;
+};
+
+const capOverlays = (features) => {
+  const sorted = [...features].sort((a, b) => (b.properties.level || 0) - (a.properties.level || 0));
+  const out = [];
+  let vertices = 0;
+  let dropped = 0;
+  for (const f of sorted) {
+    const n = f.geometry.type === 'Point' ? 1
+      : countVertices(f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates);
+    if (vertices + n > MAX_OVERLAY_VERTICES) { dropped++; continue; }
+    vertices += n;
+    out.push(f);
+  }
+  if (dropped) console.warn(`[engine] dropped ${dropped} map overlays over the ${MAX_OVERLAY_VERTICES}-vertex budget`);
+  return out;
+};
+
+/**
+ * Analyze a validated request (see lib/validate.js). Sources are injectable
+ * so tests can run the full pipeline offline.
+ */
+export const analyze = async (request, { sources = defaultSources, now = Date.now(), deadlineMs = SOURCE_DEADLINE_MS } = {}) => {
+  const route = await getRouteModel(request);
+  const L = route.lengthMiles;
+
+  let position = null;
+  let window = null;
+  if (request.location) {
+    const p = projectOntoRoute(route.coords, route.cum, request.location.lng, request.location.lat, request.location.lastMile ?? null);
+    position = {
+      mile: round2(p.mile),
+      offRouteMiles: round2(p.offRouteMiles),
+      lat: request.location.lat,
+      lng: request.location.lng,
+    };
+    window = {
+      start: round2(Math.max(0, p.mile - 1)),
+      end: round2(Math.min(L, p.mile + request.lookaheadMiles)),
+      lookaheadMiles: request.lookaheadMiles,
+    };
   }
 
-  return changes;
-}
+  const range = window ? { start: window.start, end: window.end } : { start: 0, end: L };
+  const span = Math.max(0.01, range.end - range.start);
+  const spacing = window ? ON_TRAIL_FORECAST_SPACING : Math.max(PLANNING_MIN_SPACING, L / MAX_FORECAST_POINTS);
+  const fSamples = forecastSamples(route, range.start, range.end, Math.min(spacing, span));
+  const smokeSpacing = Math.max(MIN_SMOKE_SPACING, span / MAX_SMOKE_POINTS);
+  const sSamples = forecastSamples(route, range.start, range.end, Math.min(smokeSpacing, span));
+
+  const ctx = { route, now };
+  const [fire, alerts, avalanche, water, air, forecast, recentPrecip, smoke, conditions] = await Promise.all([
+    safeLoad('Wildfire', sources.loadFire, ctx, deadlineMs),
+    safeLoad('NWS alerts', sources.loadAlerts, ctx, deadlineMs),
+    safeLoad('Avalanche', sources.loadAvalanche, ctx, deadlineMs),
+    safeLoad('River gauges', sources.loadWater, ctx, deadlineMs),
+    safeLoad('Air quality', sources.loadAir, ctx, deadlineMs),
+    safeLoad('Forecast', sources.loadForecast, { ...ctx, samples: fSamples }, deadlineMs),
+    safeLoad('Recent rainfall', sources.loadRecentPrecip, { ...ctx, samples: fSamples }, deadlineMs),
+    safeLoad('Smoke forecast', sources.loadSmoke, { ...ctx, samples: sSamples }, deadlineMs),
+    safeLoad('Trail conditions', sources.loadConditions, { ...ctx, range }, deadlineMs),
+  ]);
+
+  // The NWS forecast names the route's zone; without it (outage, abroad) the conditions loader looked one up.
+  const timeZone = forecast.data?.points?.find(p => p.timeZone)?.timeZone || conditions.data?.timeZone || undefined;
+  const opts = { now, timeZone };
+  const results = {
+    fire: detectFire(route, fire.data, opts),
+    alerts: detectAlerts(route, alerts.data, opts),
+    avalanche: detectAvalanche(route, avalanche.data, opts),
+    water: detectWater(route, water.data, opts),
+    air: detectAir(route, air.data, opts),
+    forecast: detectWeather(route, forecast.data, recentPrecip.status === 'error' ? null : recentPrecip.data, {
+      ...opts, range, maxGapMiles: spacing / 2 + 0.75,
+    }),
+    smoke: detectSmoke(route, smoke.data, { ...opts, range, maxGapMiles: smokeSpacing / 2 + 0.75 }),
+    conditions: detectConditions(route, conditions.data, opts),
+  };
+
+  const catalog = new Map();
+  const table = createHitTable(route.chunks.length);
+  for (const r of Object.values(results)) {
+    for (const h of r.hazards) catalog.set(h.id, h);
+    for (const hit of r.hits) table.add(hit);
+  }
+
+  // US-only sources say nothing about stretches outside the US.
+  const outside = new Set(results.forecast.uncoveredChunks);
+  for (const chunk of route.chunks) {
+    if (chunk.samplesCoarse.every(s => !inUnitedStatesBbox(s.lon, s.lat))) outside.add(chunk.i);
+  }
+
+  const sourceState = { fire, alerts, avalanche, water, air, forecast, smoke, conditions };
+  const officialChecked = OFFICIAL_SOURCES.filter(k => sourceState[k].status !== 'error');
+  const forecastOk = forecast.status !== 'error';
+  const smokeOk = smoke.status !== 'error';
+  const conditionsOk = conditions.status !== 'error';
+  const checkedFor = (i) => {
+    const smokeChecked = smokeOk && results.smoke.checkedChunks.has(i);
+    // The conditions model runs anywhere it has weather (terrain and snow inputs are US-only, so it is less sure abroad).
+    const conditionsChecked = conditionsOk && results.conditions.checkedChunks.has(i);
+    // AirNow reaches into Canada and Mexico where its contours do; nothing else US-only does.
+    const airChecked = officialChecked.includes('air') && results.air.checkedChunks.has(i);
+    if (outside.has(i)) return [...(airChecked ? ['air'] : []), ...(smokeChecked ? ['smoke'] : []), ...(conditionsChecked ? ['conditions'] : [])];
+    const list = officialChecked.filter(k => (k !== 'avalanche' || !results.avalanche.uncheckedChunks.has(i))
+      && (k !== 'air' || airChecked));
+    if (forecastOk && results.forecast.checkedChunks.has(i)) list.push('forecast');
+    if (smokeChecked) list.push('smoke');
+    if (conditionsChecked) list.push('conditions');
+    return list;
+  };
+
+  const { segments, hazards } = consolidate(route.chunks, table, checkedFor, catalog);
+
+  const precipNote = recentPrecip.status === 'error' ? '. Recent rainfall unavailable, so rain totals are forecast only' : '';
+  const sourcesOut = {
+    fire: publicSource(fire),
+    alerts: publicSource(alerts),
+    avalanche: publicSource(avalanche, { coverage: results.avalanche.coverage }),
+    water: publicSource(water),
+    air: publicSource(air, { nearestMonitor: results.air.nearestMonitor, validAt: air.validAt ?? null, plumesStatus: air.plumesStatus ?? 'error' }),
+    forecast: publicSource(forecast, {
+      sampledEveryMiles: round2(spacing),
+      range: [round2(range.start), round2(range.end)],
+      horizonHours: 72,
+    }),
+    smoke: publicSource(smoke, { sampledEveryMiles: round2(smokeSpacing) }),
+    conditions: publicSource(conditions, { range: [round2(range.start), round2(range.end)] }),
+  };
+  sourcesOut.avalanche.message = avalancheCoverageMessage(sourcesOut.avalanche.message, results.avalanche.coverage);
+  sourcesOut.forecast.message += precipNote;
+  for (const k of SOURCE_KEYS) if (!sourcesOut[k]) sourcesOut[k] = { status: 'skipped', fetchedAt: null, message: '', attribution: '', url: null };
+
+  const overlays = capOverlays(Object.values(results).flatMap(r => r.overlays || []));
+
+  // Daylight where the hiker is (On trail) or at the trailhead (Planning).
+  const [sunLon, sunLat, sunEle] = position
+    ? [position.lng, position.lat, pointAtMile(route.coords, route.cum, position.mile)[2] ?? 0]
+    : [route.coords[0][0], route.coords[0][1], route.coords[0][2] ?? 0];
+  const sun = daylight(now, sunLon, sunLat, sunEle);
+  const isoOrNull = (ms) => (ms == null ? null : new Date(ms).toISOString());
+
+  return {
+    version: 2,
+    routeHash: route.routeHash,
+    generatedAt: new Date(now).toISOString(),
+    mode: window ? 'on-trail' : 'planning',
+    route: {
+      name: request.name || null,
+      lengthMiles: round2(L),
+      chunkCount: route.chunks.length,
+      hasElevation: route.hasElevation,
+      timeZone: timeZone || null,
+    },
+    position,
+    window,
+    daylight: {
+      at: position ? 'position' : 'start',
+      isDaylight: sun.isDaylight,
+      sunrise: isoOrNull(sun.sunrise),
+      sunset: isoOrNull(sun.sunset),
+      civilDusk: isoOrNull(sun.civilDusk),
+    },
+    sources: sourcesOut,
+    summary: buildSummary({
+      hazards,
+      segments,
+      sources: sourcesOut,
+      position,
+      outsideCoverage: outside.size > 0,
+      caveats: buildCaveats({
+        route,
+        outside,
+        avalancheUnchecked: new Set([...results.avalanche.uncheckedChunks].filter(i => !outside.has(i))),
+        coverage: results.avalanche.coverage,
+        window,
+        forecastOk,
+        // A failed AirNow is already listed as incomplete; this is about coverage gaps.
+        airUnchecked: air.status === 'error' ? null
+          : new Set(route.chunks.map(c => c.i).filter(i => !results.air.checkedChunks.has(i))),
+        smokeOk,
+      }),
+    }),
+    segments,
+    hazards,
+    conditions: results.conditions.block,
+    overlays: { type: 'FeatureCollection', features: overlays },
+  };
+};

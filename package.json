@@ -1,35 +1,28 @@
 {
   "name": "ridgeline",
-  "version": "1.0.0",
-  "description": "",
-  "main": "vite.config.js",
-  "scripts": {
-    "dev": "concurrently \"nodemon server/index.js\" \"vite\"",
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Backcountry route hazard checker: cross-references a GPX route against live wildfire, NWS alert, avalanche, river and forecast data.",
   "type": "module",
+  "engines": {
+    "node": ">=20.13"
+  },
+  "scripts": {
+    "dev": "concurrently -n api,web -c green,cyan \"node --watch-path=server --watch-path=shared server/index.js\" \"vite\"",
+    "dev:lan": "concurrently -n api,web -c green,cyan \"node --watch-path=server --watch-path=shared server/index.js\" \"vite --host\"",
+    "build": "vite build",
+    "start": "node server/index.js --production",
+    "test": "node --test \"tests/*.test.js\"",
+    "bench": "node scripts/bench.js"
+  },
   "dependencies": {
     "@tmcw/togeojson": "^7.1.2",
-    "@turf/along": "^7.3.5",
-    "@turf/bbox": "^7.3.5",
-    "@turf/boolean-point-in-polygon": "^7.3.5",
-    "@turf/distance": "^7.3.5",
-    "@turf/length": "^7.3.5",
-    "@turf/line-chunk": "^7.3.5",
-    "@turf/line-slice": "^7.3.5",
-    "@turf/nearest-point-on-line": "^7.3.5",
-    "@turf/simplify": "^7.3.5",
+    "compression": "^1.8.1",
     "express": "^5.2.1",
-    "maplibre-gl": "^5.24.0",
-    "node-cache": "^5.1.2",
-    "xmldom": "^0.6.0"
+    "maplibre-gl": "6.12.0"
   },
   "devDependencies": {
     "concurrently": "^10.0.3",
-    "nodemon": "^3.1.14",
     "vite": "^8.1.3"
   }
 }

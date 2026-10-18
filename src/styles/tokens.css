@@ -1,0 +1,104 @@
+/*
+ * Design tokens. Hazard level and type colors are NOT here: they come only
+ * from shared/levels.js and are applied inline, so the map, profile and
+ * panels can never drift apart.
+ */
+:root {
+  color-scheme: light dark;
+
+  /* Surfaces and ink */
+  --paper: #edf0ea;
+  --surface: #ffffff;
+  --ink: #1d2622;
+  --ink-2: #4a5650;
+  --ink-3: #66726b;          /* only on --surface: 5.0:1 there, too faint on --paper */
+  --rule: #d5dbd3;
+  --rule-strong: #b3bcb3;
+  --contour: #9a6a3a;        /* elevation line, mile ticks, brand contour */
+  --focus: #1f6fd1;
+
+  /* Interface states (not hazard levels) */
+  --link: #1a5fb4;
+  --danger: #b42318;
+  --caution: #8a5300;
+  --ok: #1e6b3a;
+  --gps: #1f6fd1;
+  --scrim: rgb(237 240 234 / 0.88);
+  --shadow: 0 2px 12px rgb(29 38 34 / 0.16);
+
+  /* Fixed text colors for solid level backgrounds (theme independent) */
+  --on-level-dark: #1d2622;
+  --on-level-light: #ffffff;
+
+  /* Type: Overpass, one family, tabular numbers for miles */
+  --font: 'Overpass', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --fs-1: 13px;
+  --fs-2: 15px;
+  --fs-3: 17px;
+  --fs-4: 21px;
+  --fs-5: 28px;
+  --fs-6: 40px;
+  --fs-input: 16px;          /* 16px stops iOS zooming on focus */
+  --lh-tight: 1.15;
+  --lh-snug: 1.3;
+  --lh: 1.45;
+  --w-regular: 400;
+  --w-semibold: 600;
+  --w-heavy: 800;
+
+  /* Spacing */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+  --gutter: var(--sp-4);
+
+  /* Shape and size */
+  --radius: 6px;             /* interactive controls only */
+  --control: 40px;
+  --tap: 44px;
+  --panel-width: 420px;
+  --focus-ring: 2px solid var(--focus);
+  --focus-offset: 2px;
+
+  /* Motion: only in response to an action */
+  --dur: 160ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #141916;
+    --surface: #1d231f;
+    --ink: #e8ece6;
+    --ink-2: #b7c0b9;
+    --ink-3: #8e9891;
+    --rule: #333b36;
+    --rule-strong: #4b544e;
+    --contour: #c9a06e;
+    --focus: #6aa8ff;
+
+    --link: #8ab8ff;
+    --danger: #ff9b8f;
+    --caution: #e8b04a;
+    --ok: #7fd29a;
+    --gps: #6aa8ff;
+    --scrim: rgb(20 25 22 / 0.88);
+    --shadow: 0 2px 12px rgb(0 0 0 / 0.45);
+  }
+}
+
+@media (min-width: 900px) {
+  :root {
+    --gutter: var(--sp-5);
+  }
+}
+
+@media (max-width: 899px), (pointer: coarse) {
+  :root {
+    --control: var(--tap);
+  }
+}

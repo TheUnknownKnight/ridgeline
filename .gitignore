@@ -1,5 +1,7 @@
 node_modules/
+dist/
 .env
 *.log
-data/differ_db.json
+.scratch/
 .agents/
+.remember/

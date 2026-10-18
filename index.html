@@ -1,91 +1,121 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ridgeline — Route Health Check</title>
-  <meta name="description" content="Cross-reference your backcountry route against live hazard data">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Ridgeline — route hazard check</title>
+  <meta name="description" content="Check a GPX route against live wildfire, weather alert, avalanche, river, air-quality, smoke and forecast data, with estimated trail conditions — before you go and on the trail.">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#edf0ea" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#141916" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@400;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/src/styles/typography.css">
-  <link rel="stylesheet" href="/src/styles/index.css">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;800&display=swap">
 </head>
-<body>
-  <div id="app-container">
-    <aside id="sidebar" class="sidebar">
-      <header class="sidebar-header">
-        <div class="logo-row">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M2 20L7 8L12 14L17 4L22 20" stroke="#4a7c59" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+<body data-view="start" data-mode="planning">
+  <noscript>
+    <p class="noscript">Ridgeline needs JavaScript to read your route file and check it against live hazard data.</p>
+  </noscript>
+
+  <main class="app">
+    <aside class="panel" id="panel" role="region" aria-label="Route check">
+      <header class="appbar">
+        <h1 class="brand">
+          <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+            <path d="M3 24 L11 11 L16 18 L21 9 L29 24" />
+            <path class="brand-contour" d="M6 28 H26" />
           </svg>
-          <h1>RIDGELINE</h1>
-          <div class="mode-toggle-segmented">
-            <button id="mode-planning" class="mode-btn active">PLANNING</button>
-            <button id="mode-ontrail" class="mode-btn">ON TRAIL</button>
-          </div>
+          Ridgeline
+        </h1>
+        <div class="segmented" id="mode-switch" role="group" aria-label="Mode">
+          <button type="button" data-mode="planning" aria-pressed="true">Plan</button>
+          <button type="button" data-mode="on-trail" aria-pressed="false">On trail</button>
         </div>
-        <p class="subtitle">Route Health &amp; Hazard Analysis</p>
       </header>
 
-      <div id="import-zone" class="import-zone">
-        <div class="import-icon">
-          <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
-            <path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke="#9a9478" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </div>
-        <p class="import-title">Drop a GPX file here</p>
-        <p class="import-hint">From AllTrails, CalTopo, FarOut, or Gaia GPS</p>
-        <button id="btn-import" class="btn-secondary">Or select file</button>
-        <input type="file" id="file-input" accept=".gpx" style="display: none;" />
-      </div>
+      <div id="banner" class="banners"></div>
 
-      <div id="loading-indicator" class="loading-panel hidden">
-        <div class="spinner"></div>
-        <p class="loading-text">Analyzing route against live data…</p>
-        <div class="loading-sources">
-          <span class="source-tag" id="src-nws">NWS Weather</span>
-          <span class="source-tag" id="src-nifc">NIFC Fire</span>
-          <span class="source-tag" id="src-avy">Avalanche.org</span>
+      <section id="start-view" class="start" aria-labelledby="start-title">
+        <div class="start-intro">
+          <h2 id="start-title" class="start-title">Is your route clear?</h2>
+          <p class="start-lede">Ridgeline checks your track against live wildfire perimeters, National Weather Service alerts, avalanche forecasts, river gauges, measured air quality, smoke and the weather forecast, estimates what's underfoot, then tells you what's on the route and exactly where.</p>
         </div>
-      </div>
+        <div id="dropzone" class="dropzone">
+          <p class="dropzone-text">Drop a GPX, KML or GeoJSON file here</p>
+          <div class="dropzone-actions">
+            <button type="button" id="open-file" class="btn btn-primary">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 15V4M7.5 8.5L12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" /></svg>
+              Open GPX file
+            </button>
+            <button type="button" id="try-sample" class="btn">Try a sample route</button>
+          </div>
+          <p class="dropzone-hint">Export a track from Gaia GPS, CalTopo, FarOut, AllTrails or your GPS watch. Only the track's points are sent for the check; the file stays on this device.</p>
+          <input type="file" id="file-input" hidden>
+        </div>
+        <div id="recent"></div>
+        <p class="disclaimer">Ridgeline summarizes public data. Conditions change fast — always check with the land manager and official forecasts before you go.</p>
+      </section>
 
-      <div id="results-container" class="hidden">
-        <div id="gps-fallback-notice" class="gps-fallback-notice hidden">
-          ⚠ GPS unavailable — using last known position
-        </div>
-        <div id="sync-status" class="sync-status hidden"></div>
-        <div id="lookahead-setting" class="lookahead-setting hidden">
-          <label class="lookahead-label">
-            <span class="lookahead-text">Lookahead</span>
-            <input type="range" id="lookahead-range" min="5" max="30" value="15" step="1">
-            <span id="lookahead-value" class="lookahead-val">15 mi</span>
-          </label>
-        </div>
-        <div id="route-summary" class="route-summary"></div>
-
-        <div id="filter-pills" class="filter-pills">
-          <button class="filter-pill active" data-type="fire"><span class="pill-dot" style="background: var(--accent-rust)"></span>Fire</button>
-          <button class="filter-pill active" data-type="weather-alert"><span class="pill-dot" style="background: var(--accent-amber)"></span>Weather</button>
-          <button class="filter-pill active" data-type="avalanche"><span class="pill-dot" style="background: var(--accent-ice)"></span>Avalanche</button>
-          <button class="filter-pill active" data-type="snowpack"><span class="pill-dot" style="background: var(--text-secondary)"></span>Snowpack</button>
+      <section id="route-view" class="route-view" aria-labelledby="route-name" hidden>
+        <div class="route-head">
+          <div class="route-id">
+            <h2 id="route-name" class="route-name"></h2>
+            <p id="route-meta" class="route-meta"></p>
+          </div>
+          <div class="route-actions">
+            <button type="button" id="check-again" class="btn btn-quiet btn-small">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4" /></svg>
+              Check again
+            </button>
+            <button type="button" id="change-route" class="btn btn-quiet btn-small">Change route</button>
+          </div>
         </div>
 
-        <div id="route-profile" class="route-profile hidden"></div>
+        <div id="verdict" class="verdict"></div>
+        <div id="verdict-notes" class="verdict-notes"></div>
+        <section id="trail" class="trail" aria-label="Your position" hidden></section>
 
-        <section id="delta-section" class="section-delta hidden">
-          <h2>Since you last checked</h2>
-          <div id="delta-list"></div>
-        </section>
+        <div id="profile" class="profile-slot"></div>
+        <div id="filters" class="filters" hidden></div>
+        <div id="changes" class="changes-slot" hidden></div>
 
-        <section id="segments-section">
-          <h2>Route Segments</h2>
-          <div id="segments-list"></div>
-        </section>
-      </div>
+        <div class="tabs" id="tabs" role="tablist" aria-label="Route details">
+          <button type="button" class="tab" role="tab" id="tab-hazards" data-tab="hazards" aria-controls="panel-hazards" aria-selected="true">
+            What to know <span class="tab-count" id="count-hazards" aria-hidden="true"></span>
+          </button>
+          <button type="button" class="tab" role="tab" id="tab-log" data-tab="log" aria-controls="panel-log" aria-selected="false" tabindex="-1">
+            Along the route
+          </button>
+          <button type="button" class="tab" role="tab" id="tab-conditions" data-tab="conditions" aria-controls="panel-conditions" aria-selected="false" tabindex="-1">
+            Trail
+          </button>
+          <button type="button" class="tab" role="tab" id="tab-sources" data-tab="sources" aria-controls="panel-sources" aria-selected="false" tabindex="-1">
+            Data <span class="tab-flag" id="flag-sources" hidden></span>
+          </button>
+        </div>
+        <div class="tabpanel" role="tabpanel" id="panel-hazards" aria-labelledby="tab-hazards" tabindex="0"></div>
+        <div class="tabpanel" role="tabpanel" id="panel-log" aria-labelledby="tab-log" tabindex="0" hidden></div>
+        <div class="tabpanel" role="tabpanel" id="panel-conditions" aria-labelledby="tab-conditions" tabindex="0" hidden></div>
+        <div class="tabpanel" role="tabpanel" id="panel-sources" aria-labelledby="tab-sources" tabindex="0" hidden></div>
+      </section>
     </aside>
-    <main id="map-container"></main>
+
+    <div class="map-area" id="map-area">
+      <div id="map" class="map"></div>
+      <div id="pick-hint" class="pick-hint" hidden>
+        <span>Tap the map where you are</span>
+        <button type="button" id="pick-cancel" class="btn btn-small">Cancel</button>
+      </div>
+    </div>
+  </main>
+
+  <div id="drop-overlay" class="drop-overlay" hidden>
+    <p>Drop to open this route</p>
   </div>
-  <script type="module" src="/src/js/app.js"></script>
+  <div id="live" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
+
+  <script type="module" src="/src/main.js"></script>
 </body>
 </html>

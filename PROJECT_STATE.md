@@ -1,121 +1,83 @@
-# Ridgeline — Project State
+# Ridgeline — project state
 
-## 1. Architecture
-GPX -> GeoJSON (@tmcw/togeojson, frontend) -> 1-mile segment chunks
-(backend) -> per-segment official hazard detection -> consolidation into
-mile-range entries -> reasoning layer fills gaps within the On Trail
-lookahead window -> sidebar.js + mapManager.js render the same
-consolidated data. differ.js/differ_db.json is the persistence layer
-behind "since you last checked" alerts (self-healing, gitignored).
+Last full rewrite: 2026-10-17 (v2). This file records decisions and measured facts that are not obvious from the code. The README covers what the app does and how to run it.
 
-## 2. Load-bearing conventions
-- node-cache: useClones: false. Everything from getCached() is a
-  reference — never mutate in place, build new wrapper objects instead.
-- Expensive geometry (bbox, @turf/simplify) computed once at
-  cache-refresh time, never per-request.
-- Always bbox-pre-filter before @turf/booleanPointInPolygon.
-- Mile-range consolidation merges ONLY on identical signature. Official
-  hazards: same hazard identity. Inferred estimates: category AND
-  confidence AND full binned-inputs array must all match — category
-  alone is not sufficient; raw numeric values are never compared
-  directly, only binned labels.
-- "No estimate" always falls through to plain "clear" — never a
-  hazard-shaped badge.
-- Git initialized, repo private on GitHub. Features land as separate,
-  reviewable commits.
-- Reasoning layer runs ONLY on segments with hazards.length === 0, AND
-  only within the active On Trail lookahead window. Planning mode does
-  NOT get localized reasoning-layer estimates for the full route — a
-  deliberate v1 scope decision.
-- Safety line: reasoning layer never computes a competing risk score for
-  high-consequence calls (avalanche go/no-go, ford safety, flood
-  evacuation) — those stay fully deferred to official sources.
+## Load-bearing conventions
 
-## 3. Data sources
-- nifc.js: WFIGS_Interagency_Perimeters_CURRENT (active fires only),
-  where: '1=1'. Incident type labeling WF/RX/CX/fallback. Pagination
-  kept as fallback.
-- avalanche.js: api.avalanche.org, 82 zones globally, bbox + simplify
-  (tolerance 0.001) at cache time. Verified via point-ID parity, zero
-  mismatches raw-vs-simplified.
-- nws.js: forecast only (gridpoints) — NOT suitable for observed/
-  trailing precip, confirmed by investigation. AbortController 10s
-  timeout wraps the full response including body parsing (a bug where
-  clearTimeout fired before the body stream was found and fixed). Cached
-  by gridId/gridX,gridY, 1hr TTL.
-- openmeteo.js: observed trailing 48h precip (past_days=2), no auth.
-  Rate limits 600/min, 5000/hr, 10000/day, no SLA. Same microclimate
-  modeling weakness as NWS grids (accepted). Scoped ONLY to the On Trail
-  lookahead window — full-route sampling calculated at 2,650+ calls for
-  PCT-scale, tested and rejected as too slow/rate-limited.
-- burn_scars.js: HISTORICAL WFIGS_Interagency_Perimeters archive
-  (deliberately different from nifc.js's Current endpoint). Filter:
-  attr_FireDiscoveryDateTime within 2 years AND (attr_PercentContained =
-  100 OR attr_ContainmentDateTime IS NOT NULL). Accepted tradeoff: drops
-  ~26% of real settled burn scars due to sparse agency record-keeping —
-  measured, not a bug. Cache TTL 24h. Explicitly skipped when !location
-  (Planning mode) — this was a real bug (unconditional fetch, unused
-  result) found and fixed.
+- **One geometry implementation.** `shared/geo.js` measures, slices, samples and projects routes for both server and browser. Never use another library for route math, or mile markers drift between map, list and server.
+- **One severity scale.** `shared/levels.js` — levels 0–4 (clear, low, moderate, high, extreme) and every hazard color. ESTIMATED hazards are capped at `MAX_ESTIMATED_LEVEL` (2) so a model inference never outranks an official warning.
+- **Never "clear" from missing data.** Every source loader returns `{ status, fetchedAt, message, data }` and never throws. `status` is `ok | stale | partial | error | skipped`. Segments carry `checked: [...]` listing only sources that actually evaluated that stretch. The summary is `incomplete` when any source is error/partial/stale.
+- **Shared caches are read-only.** `server/lib/cache.js` values are shared across requests. Build new objects; never mutate cached data.
+- **Expensive geometry at fetch time.** Simplification, bboxes and spatial indexes are built when upstream data is cached, never per request.
+- **Consolidation merges only identical hazard sets** (`id@level` for every hazard plus the `checked` list). Per-chunk notes/distances never block a merge; the closest distance is kept.
+- **Clients never supply cache keys.** The server fingerprints coordinates itself; `routeHash` refreshes are only accepted for routes the server already built.
+- **No server-side user data.** Routes, positions and results are not persisted on the server. "Since your last check" lives in the browser (IndexedDB).
 
-## 4. Known measured numbers
-- Full PCT (dense-pct.json, 3,410mi) Planning-mode wall-clock: 6,268ms
-- Burn scar cold fetch: ~9,145ms HTTP fetch, ~23,314ms JSON parse
-  (dominant cost, ~100MB MultiPolygon text), ~962ms bbox/simplify. ~38s
-  total, mitigated by 24h TTL.
-- On Trail warm-cache run: ~3.5s. Reasoning/lookahead math itself: <5ms.
-- Avalanche polygons: 9,105 total vertices across 82 zones, largest zone
-  ~5,000 vertices.
+## Frontend conventions
 
-## 5. KNOWN OPEN ITEM — NOT DISCOVERABLE FROM CODE, TAKE AS GIVEN
-Moving a test coordinate 1.5 miles (crossing an NWS grid boundary)
-triggered a real ~8.5 second wait on a single api.weather.gov/points
-cache miss, found during manual regression testing. This was never
-logged or committed anywhere — it exists only as a verbal finding. It is
-a genuine latency problem for the On Trail experience, which is supposed
-to be fast and glanceable. TASK: reproduce this independently (pick two
-test coordinates that straddle an NWS grid boundary, cold-cache one,
-confirm the delay) before trusting or dismissing this finding, then
-treat it as a real bug to fix — likely candidates: pre-fetching the
-/points lookup for the lookahead window's bounding area in advance, or
-a longer/separate cache TTL for the gridId-to-office mapping itself
-(which rarely changes) versus the forecast data it unlocks.
+- Vanilla ES modules, no framework. `src/js/app.js` owns state and orchestration; rendering lives in `src/js/panels/*`; the map is `src/js/map/mapView.js` (MapLibre 6 — named imports only, the worker is wired with `setWorkerUrl`).
+- All upstream and file-derived text goes through `h()` / `textContent` (`src/js/ui/dom.js`); links only via `safeUrl()`. No `innerHTML` with data.
+- Map paint can't read CSS variables, so map colors come from `shared/levels.js` and the theme objects in `mapView.js`.
+- Overpass (the UI font) ships a zero-width middle dot in the Google Fonts subset — don't join UI text with " · ". Server `detail` strings use " · " only as a fact separator that the UI splits into a list.
+- Absolutely positioned elements inside the panel must stay inside a positioned ancestor (`.panel` is `position: relative`), or they escape the overflow clip and make the whole page scroll on phones.
+- The On-trail plaque is computed client-side from the live position (`aheadView` in `verdict.js`), so it stays right between server refreshes.
+- Climb totals: resample every 0.05 mi, smooth over ~0.15 mi, 5 m hysteresis. Raw DEM-derived elevations overstate climb by ~45%.
+- "Unchecked" is about coverage, not only failures: a quiet stretch missing any official source from `checked` (outside US data, unrated avalanche terrain) draws grey everywhere (`describeSegments`), even when every source is `ok`. Forecasts outside the On trail window are covered by the window shade instead. Filters never turn a hazard into "Nothing reported" — rows and readouts say "Hidden by filters".
+- An On trail answer is never shown in Plan; switching back to Plan replaces an in-flight On trail check. The hint for projecting GPS onto out-and-back routes survives fix-less GPS states (`lastRouteMile`); typing a mile while GPS is live re-picks the pass instead of overriding GPS.
+- Smoke layer rules (from its adversarial review): AirNow freshness is judged by the readings' own time (stale after 3 h, unusable after 12 h); a monitor that misses an hour keeps its last reading for 3 h; satellite plumes get a 2.5 s budget and never hold up AirNow; a newer satellite trace replaces an older one; the plume hazard's diff follows the plume feed's health (`airPlumes`); NOAA's forecast gets an 8 s budget before the CAMS fallback (PM2.5-only, picked by trail mile); air data shows its AQI category word and official AQI colors.
+- Service worker: the shell is replaced only after every file it needs is cached; OpenFreeMap vector tiles are cached under a build-agnostic key (`/planet/_/z/x/y.pbf`) because the TileJSON points at a new build weekly; style/TileJSON are network-first (3 s) and never evicted; asset trimming keeps whatever the cached shell references. Probes: `.scratch/verify-sw/run-all.mjs`.
 
-## 6. KNOWN UNFINISHED TEST PROOF — NOT DISCOVERABLE FROM CODE, TAKE AS
-GIVEN
-The reasoning-layer test fixture has 8 cases. Two are not fully proven,
-regardless of what test file comments or prior commit messages may
-claim:
-- Case 7 (outside lookahead window): confirmed and fixed a real bug
-  (coarse 3-point sample wasn't fetching outside the window at all).
-  NOT yet confirmed: does scorer.js correctly skip running entirely
-  outside the window when there's no official hazard present? The only
-  test run had an official alert present, which short-circuits before
-  this matters. TASK: add an isolated mock — hazard-free segment outside
-  the window — confirm it's clear because inference didn't run, not by
-  coincidence.
-- Case 8 (Open-Meteo timeout): confirmed correct END-USER behavior
-  (failure degrades to clear, merges correctly with dry neighbors) but
-  this is evidentially ambiguous — a silently swallowed error would look
-  identical. TASK: attach a debug flag (e.g. _debugOpenMeteoFailure:
-  true) to the specific failing segment to prove the failure branch
-  actually executed.
+## Upstream facts (verified live 2026-10-17)
 
-## 7. Deferred / explicitly out of scope for v1
-- Aspect/shade-based ice reasoning: elevation gives grade, not compass
-  aspect — needs DEM data not available. Grade-based signals only.
-- Phase 2 not started: SNOTEL, land/wilderness boundaries, permits
-  (recreation.gov/RIDB — no key exists yet), crowdsourced reports.
-- Planning mode: no localized reasoning-layer estimates for the full
-  route (see section 2).
+- **NIFC WFIGS** (`services3.arcgis.com/T4QMspbfLg3qTGWY`): fetched nationwide, minimal fields, `geometryPrecision=5`, `maxAllowableOffset=0.0002` → ~1.4 MB raw instead of 20 MB. ~99 perimeters and ~400 incidents; ~300 incidents have no perimeter (joined by `IrwinID`, uppercase GUID with braces). ArcGIS returns query errors as HTTP 200 with an `error` body. `attr_PercentContained` is null for ~1/3 of perimeters — keep null distinct from 0. Upstream refreshes every 5 min.
+- **NWS alerts**: `/alerts/active?status=actual` nationwide is ~166 KB gzip; 97% of alerts have null geometry and need zone shapes (`/zones/{forecast|fire|county}/{id}`, no batch endpoint, cache ~30 days). `expires` is the message expiry, not the hazard end — use `ends`, then `eventEndingTime`. Dedupe by VTEC `office.phen.sig.etn`. Unknown query params return 400. ~6% of burst requests return a transient 500 → retries are mandatory.
+- **NWS /points** was 0.2–0.4 s in testing (the earlier "8.5 s" report was not reproduced). Coordinates beyond 4 decimals 301-redirect. Snapping to 0.02° can cross a border; the code retries the exact point on 404.
+- **NWS gridpoints**: `validTime` is `start/ISO-duration`; the first values start ~8 h in the past and must be clipped and prorated.
+- **avalanche.org map-layer**: `danger_level` −1 = no rating (every zone in October); `off_season` is per center; `start_date`/`end_date` are UTC **without** a `Z`; expired products drop to −1 with null dates. Zone ids change between seasons. CAC, EARAC, EWYAIX, HAC, SOAIX never rate.
+- **NOAA NWPS REST** (`api.water.noaa.gov`) is limited to **10 requests per 5 minutes per IP** and needs `srid=EPSG_4326` or it silently returns nothing. Ridgeline instead uses NOAA's ArcGIS gauge service (`mapservices.weather.noaa.gov/.../riv_gauges/MapServer`, layer 0 observed, layer 15 full forecast period), filtered server-side to action/minor/moderate/major: one ~26 KB nationwide request.
+- **Open-Meteo**: free tier is non-commercial, 600 location-calls/min, 10k/day per IP; every location counts as a call (×vars/10 above 10 variables). Single-location responses are objects, multi-location are arrays. Used only for past-48 h rainfall and air quality, snapped to 0.05° and cached 1 h.
 
-## 8. Known failure patterns — read before trusting a "done" report
-This project has repeatedly produced confident summaries that didn't
-survive isolated verification: a field name (irwin_PercentContained)
-that never existed in either API's schema, undetected because an earlier
-check verified the field existed in the response but never checked what
-the code actually read; an early-exit break; that silently dropped
-legitimate multi-hazard segments, undetected because prior regression
-tests were boolean-only (hazard present, yes/no) rather than count-aware;
-a performance benchmark reported as reflecting a fix that actually
-predated it. Operating discipline: verify claims against raw JSON
-output, not narrative summaries.
+- **EPA AirNow** (`services.arcgis.com/cJ9YHowT8TU7DUyn`): `AirNowLatestContoursPM25` (AQI-category polygons, `gridcode` 1–6, ~60 polygons / ~80 KB nationwide with `maxAllowableOffset=0.005`) and `Air_Now_Current_Monitors_PM25` (~1,300–1,700 monitors incl. ~20 USFS fire monitors named only by AQS id, plus US embassy monitors abroad). Hourly, published ~40 min past the hour. `ValidTime` is seconds.
+- **NOAA HMS smoke**: one KML per UTC day at `satepsanone.nesdis.noaa.gov/pub/FIRE/web/HMS/Smoke_Polygons/KML/YYYY/MM/hms_smokeYYYYMMDD.kml`, appended through the day (100–300 KB); density in `styleUrl` / description, times as `YYYYDDD HHMMUTC`. Today's file can 404 early in the UTC day.
+- **NOAA NAQFC PM2.5** (`mapservices.weather.noaa.gov/raster/rest/services/air_quality/ndgd_apm25_hr01_bc/ImageServer`): the catalog also holds ~74 junk rows with null valid times — filter on `idp_issueddate`. getSamples returns at most **20 rasters per call** (extra are silently dropped) and needs `outFields=idp_validtime` for times; points far outside the grid make the whole call fail with 400, points just outside are omitted. Grid ≈ lon −153…−49, lat 12…61.
+- **LANDFIRE / IIPP rasters** (`lfps.usgs.gov/.../Landfire_Topo/LF2020_{SlpD,Asp,Elev}_CONUS`, `imagery.geoplatform.gov/iipp/.../USFS_EDW_NLCD_{TCC,Landcover}_CONUS`): getSamples ≤1,000 points per call (truncates silently above). TCC and NLCD are time-series mosaics: lock the newest raster by the last year in its name. Aspect −1 = flat; TCC 254/255 = no data. 3DEP getSamples ignores rendering rules — don't use it for slope.
+- **SNODAS** (`mapservices.weather.noaa.gov/raster/rest/services/snow/NOHRSC_Snow_Analysis/MapServer`): no point sampler that scales; export a PNG of layer 7 (SWE classes in inches, first class transparent) and match pixel colors to `/legend`. Valid 12Z daily, published ~17–18Z; layer 6 footprint gives `idp_validtime`.
+- **Open-Meteo concurrency**: more than two concurrent requests from one IP get HTTP 429 "Too many concurrent requests" (which opens our 60 s circuit). `weatherHistory.js` holds two process-wide slots shared by every caller.
+- **OpenStreetMap surfaces**: on the JMT only 30% of miles carry `surface=*` and ~98% of tagged backcountry trail is just `ground`; overpass-api.de asks automated users to self-host. Trail surface is therefore inferred from land cover, slope and canopy, not OSM.
+
+## Resilience rules (from the adversarial review)
+
+- A cached copy inside its stale window is returned within 3 s even if the upstream hangs; the refresh keeps running in the background. Failures covered by stale data pause retries for 30 s.
+- Each source loader gets 20 s per analysis; overruns are reported as unavailable, never awaited.
+- A 429 opens a per-host circuit for `Retry-After` (default 60 s); 429s are never retried.
+- Empty national feeds (0 fires, 0 alerts, 0 avalanche zones) are treated as upstream errors, not as "nothing to report".
+- Constant or null elevations are placeholders and are stripped (Google Earth/My Maps KML writes altitude 0); lapse-rate correction is skipped when the trail–grid gap exceeds 1,500 m.
+- Route models are capped by total samples (~300k ≈ 30,000 route-miles), not just by count.
+
+## Measured performance (2026-10-17, home connection)
+
+- Full 3,410-mile synthetic route, Planning: ~10 s cold with trail conditions (~4 s without; Open-Meteo hourly history is the long pole), ~0.3–0.6 s warm. On trail warm refresh: ~0.1 s.
+- Response size for that route: ~290 KB JSON (gzip ~8× smaller).
+- `npm test`: 107 tests, all offline, ~11 s.
+- Production bundle: app 96 KB (34.5 KB gzip) + MapLibre 1.05 MB (284 KB gzip) in its own long-cached chunk.
+- Sample JMT (202 mi): ~1.6–3.4 s cold (bound by the NWS forecast fan-out, ~100 points), ~20 ms warm, On trail refresh ~5–8 ms and a 0.1 KB request.
+- Against v1 (commit f806d6f, same JMT, fresh processes): v1 was ~1.2–2.0 s cold because it fetched far less (3 forecast points, no alert zones, gauges, rain or air quality); v2 is ~5x faster warm (20 vs 90 ms), sends 0.1 KB instead of 140 KB per On trail refresh, and returns 27 KB instead of 157 KB per Plan check. Reopening a saved route shows the last result from IndexedDB before any network call.
+
+## Trail-conditions model
+
+- Deterministic hourly state model in `shared/conditions/` (no AI): snowpack (SWE, liquid, cold content) and tread wetness (FAO-56 depletion) per point, stepped through 10 days of history and 3 days of forecast, read at "now" and 8 AM / 2 PM local for three days. Parameter sources are in `.scratch/conditions/research.md`; snow-firmness and dust thresholds are heuristics awaiting field calibration.
+- Points every max(0.25 mi, length/2000); Open-Meteo cells capped at 100 per analysis (points borrow the nearest cell and are lapse-corrected to their own elevation, skipped beyond a 1,500 m gap). SNODAS resets the snowpack at its valid time where it has an answer.
+- Snow and ice become ESTIMATED hazards (`trail:snow`, `trail:ice`, type `trail`); mud, slick rock, dust and loose rock stay in the Trail tab. Terrain or snow-analysis outages lower confidence (noted in the tab) but don't make the source partial; missing weather does.
+- Measured: JMT cold ~2.6–4.4 s for the whole analysis, warm ~0.1–0.2 s; 3,410-mi synthetic route ~4 s cold, ~0.6 s warm.
+- Rules from its adversarial review: cold content is limited to the top ~75 mm SWE (a night's cold doesn't reach a deep pack); snow depth is tracked with Hedstrom–Pomeroy new-snow density and settling; clear nights build a surface crust even above 0 °C; snow likelihood never drops as depth rises; a dusting is never "dry"; cells fetched on different UTC days are aligned by timestamp before reading; unmodeled miles are explicit "Not estimated" stretches; snow-analysis or terrain gaps make the source partial and "dry" uncertain; each snow class is its own hazard id; window labels are recomputed on the device from each window's time.
+
+## Deliberate scope decisions
+
+- Forecast hazards use a 72-hour horizon; Planning mode samples the forecast every max(2 mi, length/120); On trail samples every mile inside the lookahead window only. Official sources always cover the whole route in both modes.
+- Avalanche danger uses the zone's max rating across elevation bands (conservative). Per-band refinement needs per-center elevation thresholds parsed from free-text HTML — not done.
+- No USGS flow percentiles yet (NWPS flood categories only). USGS legacy WaterServices shuts down 2027-02-22; use `api.waterdata.usgs.gov` if added.
+- Phase 2 ideas not started: land-manager closures, permits (RIDB), crowdsourced trail reports, burn-scar debris-flow risk, SNOTEL station annotations, creek-crossing timing from OSM fords, terrain horizon shading (Terrarium tiles) for morning ice.
+
+## Known failure patterns — read before trusting a "done" report
+
+Earlier iterations of this project shipped confident summaries that did not survive isolated checks (a field name that never existed, a midpoint test that missed sub-mile fire crossings, a benchmark that predated its fix, per-point alert caching for an hour). Verify claims against raw upstream JSON and the test suite, not narrative summaries.

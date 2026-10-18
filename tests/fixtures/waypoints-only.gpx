@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Ridgeline test fixtures" xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+  <metadata>
+    <name>JMT landmarks (waypoints-only test fixture)</name>
+    <desc>Waypoints only; no tracks or routes. Points excerpted from OpenStreetMap relation 1244828 (John Muir Trail), (c) OpenStreetMap contributors, ODbL 1.0; elevations Open-Meteo (CC BY 4.0) / Copernicus DEM GLO-90. Test fixture; not for navigation.</desc>
+  </metadata>
+  <wpt lat="37.732821" lon="-119.557779">
+    <ele>1236.0</ele>
+    <name>Happy Isles Trailhead</name>
+    <desc>Northern terminus of the John Muir Trail, Yosemite Valley</desc>
+    <sym>Trailhead</sym>
+  </wpt>
+  <wpt lat="37.870566" lon="-119.365413">
+    <ele>2628.0</ele>
+    <name>Tuolumne Meadows</name>
+    <desc>Resupply point; start of Lyell Canyon</desc>
+    <sym>Campground</sym>
+  </wpt>
+  <wpt lat="37.760965" lon="-119.248203">
+    <ele>3378.0</ele>
+    <name>Donohue Pass</name>
+    <desc>Yosemite NP / Ansel Adams Wilderness boundary</desc>
+    <sym>Summit</sym>
+  </wpt>
+  <wpt lat="37.112497" lon="-118.668836">
+    <ele>3650.0</ele>
+    <name>Muir Pass</name>
+    <desc>Muir Hut</desc>
+    <sym>Summit</sym>
+  </wpt>
+  <wpt lat="36.694936" lon="-118.373425">
+    <ele>4014.0</ele>
+    <name>Forester Pass</name>
+    <desc>Highest pass on the PCT/JMT</desc>
+    <sym>Summit</sym>
+  </wpt>
+  <wpt lat="36.578590" lon="-118.292138">
+    <ele>4355.0</ele>
+    <name>Mount Whitney</name>
+    <desc>Southern terminus of the John Muir Trail</desc>
+    <sym>Summit</sym>
+  </wpt>
+  <wpt lat="36.586878" lon="-118.240140">
+    <ele>2574.0</ele>
+    <name>Whitney Portal Trailhead</name>
+    <desc>Mount Whitney Trail trailhead (exit for southbound JMT hikers)</desc>
+    <sym>Trailhead</sym>
+  </wpt>
+</gpx>

@@ -1,0 +1,14 @@
+{
+  "name": "Ridgeline",
+  "short_name": "Ridgeline",
+  "description": "Check a hiking route against live wildfire, weather alert, avalanche, river and forecast data.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#edf0ea",
+  "theme_color": "#edf0ea",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

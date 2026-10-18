@@ -1,19 +1,10 @@
-import express from 'express';
-import { fileURLToPath } from 'url';
-import path from 'path';
-import apiRouter from './api/router.js';
+import config from './config.js';
+import { createApp } from './app.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.use(express.json({ limit: '50mb' }));
-
-// API Routes
-app.use('/api', apiRouter);
-
-app.listen(PORT, () => {
-  console.log(`Backend server running on http://localhost:${PORT}`);
+const server = createApp().listen(config.port, () => {
+  console.log(`Ridgeline API listening on http://localhost:${config.port}${config.isProduction ? ' (production)' : ''}`);
 });
+
+const shutdown = () => server.close(() => process.exit(0));
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);

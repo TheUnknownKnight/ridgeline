@@ -1,176 +1,153 @@
-# Ridgeline — Backcountry Route Health & Hazard Analysis
+# Ridgeline
 
-Ridgeline is a premium, real-time backcountry safety analyzer designed for hikers, backpackers, and trail runners. It allows users to upload standard GPX route files (exported from AllTrails, CalTopo, FarOut, Gaia GPS, etc.) and automatically cross-references the route geometry against live hazard data from official federal and regional agencies. 
+Ridgeline checks a hiking route against live hazard data before and during a trip. Load a GPX track and it tells you, mile by mile, where the route meets active wildfires, NWS watches and warnings, avalanche danger, flooding rivers, smoke and unhealthy air, and forecast trouble (thunderstorms, wind, heavy rain, snow, heat, cold), what is likely underfoot (snow, ice, mud, slick rock, dust), and how fresh each piece of data is.
 
-By fusing spatial geometries with active wildfire perimeters, National Weather Service (NWS) forecasts, and public avalanche advisories, Ridgeline highlights dangerous or degraded trail conditions before and during a trip.
+It is built for two moments:
 
----
+- **Planning** — the whole route, days before you go.
+- **On trail** — your GPS position, what is ahead in the next 5–50 miles, refreshed as you move, readable on a phone in sunlight, and still useful offline with the last check clearly dated.
 
-## Key Features
+> Ridgeline summarizes public data. Conditions change fast and agencies can be slow to map them. Always check closures and forecasts with the land manager and the official sources before you go.
 
-### 1. Multi-Source Hazard Fusion
-*   **Active Wildfires (NIFC/IRWIN):** Fetches live wildfire boundaries and prescribed burns directly from the National Interagency Fire Center (NIFC).
-*   **Severe Weather & Alerts (NWS):** Fuses NOAA/NWS active meteorological alerts (watches, warnings, advisories) with point forecasts.
-*   **Inferred Mud & Creek Hazards:** Analyzes recent and forecast precipitation levels to estimate mud hazard severity and identify elevated creek crossings.
-*   **Avalanche Danger (Avalanche.org):** Integrates public regional avalanche forecasts to report danger levels (1-5 scale) and display specific travel advice.
+## What it checks
 
-### 2. Dual Modes of Operation
-*   **Planning Mode:** Conducts a full-length scan of the uploaded route (suited for pre-trip preparation).
-*   **On-Trail Mode:** Utilizes browser-based GPS tracking (with a graceful offline/no-signal fallback) to analyze only what lies ahead within a sliding **Lookahead Window** (customizable from 5 to 30 miles, default 15 miles).
+| Hazard | Source | How it is matched to the route |
+| --- | --- | --- |
+| Wildfire perimeters | NIFC WFIGS current perimeters | Every 0.1 mi of trail is tested against each perimeter. Inside / within 1 mi / within 5 mi are graded separately. Containment, prescribed burns and stale records adjust the level. |
+| New fires without a mapped perimeter | NIFC WFIGS incident locations | About 300 active incidents nationwide have only a point of origin. Ridgeline estimates a footprint from reported acres and grades distance to it. |
+| Watches, warnings, advisories | NWS `/alerts/active` (refreshed every minute) | Warned polygons when present; otherwise the alert's forecast, fire-weather or county zone shapes. Severity sets the level; expired, cancelled and test messages are dropped. |
+| Avalanche danger | avalanche.org forecast zones | Danger 1–5 and avalanche warnings, with the forecast's expiry checked at request time. Zones that are in season but unrated are reported as *not checked*, never as safe. |
+| Flooding rivers and creeks | NOAA National Water Prediction Service gauges | Gauges at or above action stage (now or forecast) within 0.75 mi of the trail. Reservoir gauges are ignored. |
+| Thunderstorms, wind, rain, snow, heat, cold | NWS gridded forecast (72 h) + Open-Meteo recent rainfall | Sampled along the route; temperatures are adjusted to trail elevation. These are **estimates** and are capped below official warnings. |
+| Smoke and air quality now | EPA AirNow (hourly PM2.5 map and monitors, including Forest Service fire monitors) | Stretches inside an unhealthy AirNow area are official hazards (sensitive groups → low … hazardous → extreme). A monitor within 3 mi of the trail overrides the smoothed map. The nearest monitor's reading is shown. |
+| Smoke overhead | NOAA Hazard Mapping System satellite smoke analysis | Plumes traced in the last 24 h are drawn on the map; heavy smoke over the trail is a low note (satellites see the whole air column, not ground-level air). |
+| Smoke forecast | NOAA National Air Quality Forecast (PM2.5, ~5 km, bias-corrected), Open-Meteo CAMS where NOAA has no data | Peak AQI over the next 48 h, every 2 mi. An **estimate**, capped below official warnings. |
+| Trail conditions | Ridgeline's own model from Open-Meteo hourly weather (10 days back, 3 ahead), LANDFIRE slope and aspect, USFS tree canopy, Annual NLCD land cover and NOAA's SNODAS snow analysis | Every 0.25 mi: snow (firm or soft, and when it softens), morning ice, mud, slick rock, dust, loose rock. Deterministic physics, no AI. Snow and ice show as **estimated** hazards; the rest is in the Trail tab. |
 
-### 3. Lookahead Window & Override Scan
-In **On-Trail Mode**, the system optimizes performance by only chunking and scoring weather for the active lookahead window. However, to ensure absolute safety, an **Override Scan** runs in the background. It utilizes a low-overhead bounding box intersection to scan the entire trail length, warning users of severe hazards (e.g., active wildfires or Level 3+ avalanche zones) lying further ahead on the route.
+Every source reports its own health (`ok`, `stale`, `partial`, `error`). A failed or stale source is shown as such in the result and in each stretch's "checked" list — a data outage never reads as "clear".
 
-### 4. Route Hazard Diffing ("Since You Last Checked")
-Uses a lightweight local JSON-based state database (`data/differ_db.json`) keyed by a route identifier to compare the current analysis with the previous run. If new hazards are reported or old ones are cleared, they are highlighted in a dedicated delta panel in the sidebar.
+Severity uses one scale everywhere — clear, low, moderate, high, extreme — colored like the US AQI scale. Estimates are drawn dashed or hatched and never rated above moderate.
 
-### 5. Premium UI & Visual Safety Mapping
-*   **Interactive Dark-Matter Map:** Built using MapLibre GL, displaying the route path color-coded by hazard status alongside overlays for fire perimeters, weather forecasts, and avalanche zones.
-*   **SVG Route Status Strip:** Generates a deterministic elevation-style path in the sidebar showing safety status transitions with exact mile markers.
-*   **Dashed/Solid Segment Styling:** Visual differentiation between official warnings (solid line segments) and inferred warning estimates like mud or wet crossings (dashed line segments).
-*   **Segment Cards:** Breaks down route alerts into mile-by-mile segments featuring detailed descriptions and clear source attribution.
+## Using it
 
----
+1. **Open a route.** Drop a GPX, KML or GeoJSON file, or press **Try a sample route** (the real John Muir Trail from OpenStreetMap). All tracks and track segments in the file are joined in order; a planned `<rte>` is ignored when the file also has a recorded `<trk>` of the trip. Only coordinates leave your device.
+2. **Read the verdict.** The colored plaque gives the worst thing on the route and where. "Incomplete" (never green) appears when a source failed or part of the route is outside US coverage; the notes under it say exactly what wasn't checked.
+3. **Scan the elevation strip.** Real elevation from your file with a hazard band underneath. Hover or use the arrow keys to read any mile; click to jump the map there.
+4. **Dig in.** *What to know* ranks hazards with where they meet the trail, closest approach, timing, the agency's advice and a link to the official source. *Along the route* is a mile-by-mile log. *Trail* shows what is likely underfoot now and on the next mornings and afternoons, with the reasons. *Data* shows each source's health and age.
+5. **On trail.** Switch to **On trail** and allow location (or set your position on the map, or type your trail mile). The plaque then reflects only what's ahead, with the next hazard, sunset and last light. It re-checks as you move a mile or every 15 minutes, sending only the route's fingerprint, not the whole file.
+6. **Since your last check.** Reopening a route compares official hazards with your previous check on this device: new, cleared (only when that source is healthy now), worse or better.
 
-## Technical Architecture & Data Flow
+Routes and results are kept in your browser (IndexedDB), so the last check stays readable with no signal, clearly dated. The installed app (production build) also caches its own shell and recently viewed map tiles.
 
-```mermaid
-graph TD
-    A[GPX Route File Upload] -->|Client-side XML to GeoJSON| B(MapLibre GL Map & App State)
-    B -->|API Request: route, location, lookahead| C[Express Backend Server]
-    
-    C -->|BBox Filtering & Fetch| D[NIFC ArcGIS Wildfires API]
-    C -->|Two-Tier Cached Fetch| E[NWS API]
-    C -->|Fetch & Geometry Simplify| F[Avalanche.org API]
-    
-    D -->|Active Hazards JSON| G[Spatial Fusion & Scoring Engine]
-    E -->|Active Alerts & Grid Forecasts| G
-    F -->|Regional Avalanche Zones| G
-    
-    G -->|Differential Analysis| H[State Differ JSON DB]
-    G -->|Segment-by-Segment Response| B
+## Running it
+
+Requires Node.js 20.13 or newer.
+
+```bash
+npm install
 ```
 
-### Data Sources & API Integrations
-1.  **NIFC Wildfire Perimeters:** Queries the ArcGIS Feature Server `WFIGS_Interagency_Perimeters_Current` endpoint. Natively queries for features intersecting the padded route bounding box.
-2.  **NWS Weather:** Queries `api.weather.gov/points` to resolve grid cells, followed by parallel fetches for grid forecasts and active alerts.
-3.  **Avalanche Map Layer:** Queries `api.avalanche.org/v2/public/products/map-layer` to fetch nationwide regional avalanche forecast zones.
-
----
-
-## Performance Engineering & Optimizations
-
-Analyzing massive routes like the Pacific Crest Trail (~2,650 miles) or Appalachian Trail (~2,190 miles) presents substantial processing challenges. Ridgeline implements several optimizations to remain fast, memory-efficient, and responsive:
-
-*   **Geometry Simplification:** High-resolution fire perimeters and avalanche zones are simplified server-side via `@turf/simplify` (0.0005° and 0.001° tolerances respectively) to reduce payload size and accelerate Turf.js intersection checks.
-*   **Bounding Box (BBox) Guards:** Bounding boxes are pre-calculated for all fire and avalanche polygons during fetch caching. Before executing expensive polygon-in-point operations, the engine runs a fast numeric boundary check to instantly filter out irrelevant hazards.
-*   **Two-Tier Weather Caching:** Weather requests are cached using `node-cache` in two tiers. First, the coordinate-to-grid mapping is cached by coordinates. Second, the grid forecast data is cached by grid coordinate (e.g. `nws-grid-MFR/72,50`). This allows nearby points along the route that map to the same grid cell to share a single cached API call.
-*   **Parallelized Settled Fetches:** Weather points are fetched concurrently using `Promise.allSettled` wrapped in a 10-second timeout. If the NWS API encounters outages or delays, the promise is rejected, and the backend degrades gracefully (generating clear segments instead of crashing the request).
-*   **Event Loop Yielding:** For long routes generating thousands of segments, the segment scoring loop yields control back to the Node.js event loop every 500 chunks using `setImmediate` to prevent blocking the main server thread.
-*   **Segment Consolidation:** Contiguous 1-mile route chunks sharing identical hazard profiles are consolidated into single, continuous segments to reduce UI rendering load and payload size.
-
----
-
-## Technology Stack
-
-### Frontend
-*   **Framework:** Vanilla HTML5 / ES Modules / CSS3
-*   **Map Rendering:** [MapLibre GL JS](https://maplibre.org/maplibre-gl-js/docs/)
-*   **GPX Parsing:** `@tmcw/togeojson` & `xmldom`
-*   **Styling:** Modern dark theme featuring glassmorphism, responsive grid layouts, and custom fonts (*IBM Plex Mono*, *IBM Plex Sans Condensed*).
-*   **Build Tool:** Vite
-
-### Backend
-*   **Server:** Node.js & Express
-*   **Spatial Calculations:** Turf.js (`@turf/along`, `@turf/length`, `@turf/line-chunk`, `@turf/line-slice`, `@turf/boolean-point-in-polygon`, etc.)
-*   **Caching:** `node-cache`
-*   **Database:** Local JSON-file database (`differ_db.json`) for route differential state tracking.
-
----
-
-## Directory Structure
-
-```text
-ridgeline/
-├── data/
-│   ├── differ_db.json         # Route diffing database (generated at runtime)
-│   └── dense-pct.json         # Test dataset (Pacific Crest Trail extract)
-├── server/
-│   ├── api/
-│   │   └── router.js          # API routing (analyze, diff, and proxy endpoints)
-│   ├── fusion/
-│   │   ├── differ.js          # DB read/write for historical comparisons
-│   │   └── engine.js          # Primary spatial processing & hazard matching engine
-│   ├── sources/
-│   │   ├── avalanche.js       # Avalanche.org API fetch, cache, and simplify
-│   │   ├── nifc.js            # NIFC Wildfire perimeter fetch, cache, and simplify
-│   │   └── nws.js             # NWS weather & alert fetches, cache, and timeout
-│   ├── cache.js               # Shared cache instance (node-cache wrapper)
-│   └── index.js               # Express application entry point
-├── src/
-│   ├── js/
-│   │   ├── api/
-│   │   │   └── client.js      # Frontend API client wrapper
-│   │   ├── gpx/
-│   │   │   └── importer.js    # GPX file importer and XML parser
-│   │   ├── map/
-│   │   │   └── mapManager.js  # MapLibre GL initialization and layer manager
-│   │   ├── panels/
-│   │   │   ├── filterPills.js # Map layer & card filter controls
-│   │   │   ├── routeProfile.js# SVG elevation status strip rendering
-│   │   │   ├── segmentCard.js # HTML card builder for hazard segments
-│   │   │   └── sidebar.js     # Panel container UI rendering
-│   │   └── app.js             # Main frontend app coordinator
-│   └── styles/
-│       ├── index.css          # Main styling & layout configurations
-│       └── typography.css     # Typography definitions
-├── index.html                 # Main web app layout
-├── package.json               # Node dependencies and npm scripts
-├── vite.config.js             # Vite configuration with API proxying
-└── README.md                  # Project documentation (this file)
-```
-
----
-
-## Getting Started
-
-### Prerequisites
-*   Node.js (v18 or higher recommended)
-*   npm (v9 or higher)
-
-### Installation
-1.  Clone the repository:
-    ```bash
-    git clone https://github.com/your-username/ridgeline.git
-    cd ridgeline
-    ```
-2.  Install dependencies:
-    ```bash
-    npm install
-    ```
-
-### Running Locally
-To launch both the Express backend server (running on port `3000`) and the Vite frontend dev server (running on port `5173`) concurrently:
 ```bash
 npm run dev
 ```
-Open [http://localhost:5173](http://localhost:5173) in your web browser.
 
----
+Open http://localhost:5173. The API runs on port 3000 and Vite proxies `/api` to it.
 
-## Development & E2E Testing
+To try it on a phone on the same network, run `npm run dev:lan` and open the printed network URL. Browsers only allow GPS on HTTPS or localhost, so On-trail GPS needs an HTTPS deployment (or use "Set my position on the map").
 
-The project includes pre-configured CLI test scripts to evaluate performance, data collection, and integration correctness:
+### Production
 
-### 1. Engine Performance Test (`test-long.js`)
-Tests the Turf engine's calculations and scoring logic against mock long-distance route geometries without hitting live APIs. Useful for benchmarking calculations under CPU-heavy loads.
 ```bash
-node test-long.js
+npm run build
 ```
 
-### 2. End-to-End API Test (`test-e2e.js`)
-Runs a complete E2E test by sending a dense, real-world GPX extract (`dense-pct.json` containing 15,000+ points) to the backend API (`/api/analyze`). It reports the exact processing time, segment counts, and matched hazard totals.
-> **Note:** Ensure your local dev server is running before executing this script.
 ```bash
-node test-e2e.js
+npm start
 ```
+
+`npm start` serves the built app and the API from one Express process (port `PORT`, default 3000) with a strict Content-Security-Policy, compression, and long-lived caching for fingerprinted assets. Put it behind an HTTPS reverse proxy and set `TRUST_PROXY=1` so rate limiting sees real client IPs.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PORT` | `3000` | HTTP port |
+| `CONTACT_EMAIL` | placeholder | Contact address in the upstream User-Agent (NWS asks for one) — **set this** |
+| `RATE_LIMIT_PER_MIN` | `30` | Analyses per minute per IP |
+| `UPLOAD_LIMIT_PER_MIN` | `6` | Full-route uploads per minute per IP (refreshes by fingerprint don't count) |
+| `TRUST_PROXY` | `0` | Reverse-proxy hops to trust for client IPs |
+| `LOG_UPSTREAM` | unset | `1` logs every upstream request with timing |
+| `VITE_BASEMAP_STYLE` | OpenFreeMap | Override the basemap style URL at build time |
+
+## Tests and benchmarks
+
+```bash
+npm test
+```
+
+107 unit and integration tests run offline with injected sources or a stubbed network: geometry, caching (stale-while-revalidate, hung upstreams, negative caching), validation, every detector (including a 0.23-mile fire crossing that the old midpoint test missed), the engine (source outages and non-US routes must never produce "clear"), measured air quality (monitor gaps, frozen or hung feeds), the smoke forecast fallback, the trail-conditions physics (snow build-up and melt by slope direction, mud drying, morning ice, refreeze, snow-analysis seeding), sun times, the HTTP API, the panel logic that decides whether a stretch reads as clear, and production static serving (run `npm run build` first for that one).
+
+```bash
+npm run bench
+```
+
+Runs the full engine against the live services on `tests/fixtures/synthetic-pct.json` (a 3,410-mile synthetic line from Campo to the Canadian border — not the real PCT) and prints cold/warm timings, source health and the top hazards. Pass a GPX path to benchmark your own route, and `lat,lng` to benchmark On-trail mode. Typical numbers today: ~10 s cold (trail conditions included), well under 1 s warm for the full 3,410 miles; ~2.6 s cold and ~0.1 s warm for the 202-mile JMT.
+
+## How it works
+
+```
+GPX ─▶ browser: parse all tracks/segments, normalize, fingerprint
+          │  POST /api/analyze { coordinates | routeHash, location?, lookaheadMiles }
+          ▼
+server: validate ─▶ route model (1-mile chunks, 0.1-mile samples; cached by fingerprint)
+          │
+          ├─ sources (parallel, cached, stale-on-error, in-flight de-duplicated)
+          │    NIFC perimeters + incidents · NWS alerts + zone shapes · avalanche.org
+          │    NOAA gauges · NWS gridpoints · EPA AirNow + NOAA HMS smoke · NOAA PM2.5 forecast
+          │    trail conditions inputs: Open-Meteo hourly · LANDFIRE · NLCD · USFS canopy · SNODAS
+          ├─ trail-conditions model (shared/conditions): hourly snow + tread-water state per 0.25 mi
+          ├─ detectors → per-chunk hits {hazard, level, note, distance}
+          ├─ consolidate → contiguous mile ranges with identical hazards
+          └─ summary → overall level, headline, next hazard ahead, source health
+          ▼
+browser: map + elevation strip + "what to know" + "along the route" + data health,
+         saved locally (IndexedDB) for offline viewing and "since your last check"
+```
+
+- The browser and server measure the route with the same code (`shared/geo.js`), so "Mi 42.3" means the same place on the map, in the list and on the server.
+- Refreshes send only the route fingerprint; the server keeps recent route models for 3 hours and asks for the full route again if it has forgotten it.
+- No route, position or result is stored on the server. "Since your last check" is computed in the browser from the previous result on that device.
+- National datasets (fires, alerts, avalanche zones, flooding gauges) are fetched once and shared across every request, so cost does not grow with users or route length.
+
+```
+server/
+  app.js, index.js, config.js     Express app, security headers, static hosting
+  api/router.js                   POST /api/analyze, GET /api/health
+  lib/                            cache, HTTP client, validation, rate limit, spatial math
+  sources/                        one adapter per upstream service
+  fusion/                         route model, detectors/, consolidation, summary, engine
+shared/                           geometry + severity scale used by server and browser
+shared/conditions/                sun, surfaces, the hourly trail-conditions model and its plain-language reading
+src/                              the web app (vanilla JS + MapLibre GL): map/, panels/, storage/, location/
+public/                           service worker, manifest, icon, samples/ (real JMT GPX)
+tests/                            node:test suites and fixtures
+scripts/bench.js                  live benchmark
+```
+
+## Data sources and attribution
+
+- Wildfire perimeters and incidents: National Interagency Fire Center, WFIGS (IRWIN).
+- Watches, warnings, gridded forecasts: National Weather Service (public domain).
+- Avalanche forecasts: avalanche.org / National Avalanche Center and its member centers.
+- River gauges: NOAA National Water Prediction Service.
+- Measured air quality: EPA AirNow. Smoke forecast: NOAA National Air Quality Forecast Capability. Satellite smoke: NOAA Hazard Mapping System.
+- Snow on the ground: NOAA NOHRSC (SNODAS). Terrain: LANDFIRE (USGS). Tree canopy: USFS NLCD Tree Canopy Cover. Land cover: Annual NLCD.
+- Hourly weather history, recent rainfall and fallback air quality: [Open-Meteo](https://open-meteo.com/) (CC BY 4.0; air quality from Copernicus CAMS). Open-Meteo's free tier is for non-commercial use — a commercial deployment needs an Open-Meteo plan.
+- Basemap: [OpenFreeMap](https://openfreemap.org/), © OpenMapTiles, © OpenStreetMap contributors. Terrain: Mapzen terrain tiles (USGS and others) on AWS Open Data.
+
+## Known limits
+
+- US coverage. Fire, alert, gauge and forecast data are US-only; points outside NWS coverage are reported as not checked.
+- Forecast hazards cover the next 72 hours. For a trip further out, Planning mode shows current official hazards and today's outlook only.
+- Avalanche danger uses the zone's highest rating across elevation bands (conservative), not the band at each mile.
+- Fire perimeters can lag the fire by a day or more; incidents without perimeters are approximated as circles.
+- Forecast samples are spaced up to ~28 miles apart on very long routes in Planning mode; On-trail mode samples every mile ahead of you.
+- Trail conditions are a model, not an observation. The surface underfoot is inferred from 30 m land cover, slope and tree cover (OpenStreetMap rarely tags backcountry surfaces beyond "ground"); terrain shading from nearby ridges and cold-air pooling in meadows are not modeled, so morning ice can linger longer than shown. Snow older than ten days comes only from NOAA's analysis (lower 48).

@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Ridgeline test fixtures" xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+  <metadata>
+    <name>Lyell Canyon and Donohue Pass (2-day test fixture)</name>
+    <desc>Two tracks: Day 1 Tuolumne Meadows to upper Lyell Canyon; Day 2 in two segments, upper Lyell Canyon to Donohue Pass, then Donohue Pass to Thousand Island Lake. Each segment starts exactly where the previous one ends. Points excerpted from OpenStreetMap relation 1244828 (John Muir Trail), (c) OpenStreetMap contributors, ODbL 1.0; elevations Open-Meteo (CC BY 4.0) / Copernicus DEM GLO-90. Test fixture; not for navigation.</desc>
+  </metadata>
+  <trk>
+    <name>Day 1</name>
+    <desc>Tuolumne Meadows to upper Lyell Canyon</desc>
+    <trkseg>
+      <trkpt lat="37.870566" lon="-119.365413"><ele>2628.0</ele></trkpt>
+      <trkpt lat="37.869682" lon="-119.352127"><ele>2660.0</ele></trkpt>
+      <trkpt lat="37.870042" lon="-119.340751"><ele>2635.0</ele></trkpt>
+      <trkpt lat="37.867993" lon="-119.328935"><ele>2649.0</ele></trkpt>
+      <trkpt lat="37.866290" lon="-119.316881"><ele>2663.0</ele></trkpt>
+      <trkpt lat="37.863773" lon="-119.303890"><ele>2684.0</ele></trkpt>
+      <trkpt lat="37.855802" lon="-119.297125"><ele>2690.0</ele></trkpt>
+      <trkpt lat="37.848042" lon="-119.289426"><ele>2697.0</ele></trkpt>
+      <trkpt lat="37.838363" lon="-119.285085"><ele>2705.0</ele></trkpt>
+      <trkpt lat="37.829577" lon="-119.281259"><ele>2704.0</ele></trkpt>
+      <trkpt lat="37.820531" lon="-119.275743"><ele>2713.0</ele></trkpt>
+      <trkpt lat="37.812362" lon="-119.269921"><ele>2718.0</ele></trkpt>
+      <trkpt lat="37.804138" lon="-119.264436"><ele>2739.0</ele></trkpt>
+      <trkpt lat="37.794056" lon="-119.262644"><ele>2755.0</ele></trkpt>
+      <trkpt lat="37.784913" lon="-119.263124"><ele>2826.0</ele></trkpt>
+      <trkpt lat="37.777812" lon="-119.262326"><ele>2951.0</ele></trkpt>
+    </trkseg>
+  </trk>
+  <trk>
+    <name>Day 2</name>
+    <desc>Upper Lyell Canyon over Donohue Pass to Thousand Island Lake (two segments)</desc>
+    <trkseg>
+      <trkpt lat="37.777812" lon="-119.262326"><ele>2951.0</ele></trkpt>
+      <trkpt lat="37.774625" lon="-119.260616"><ele>2980.0</ele></trkpt>
+      <trkpt lat="37.772330" lon="-119.259215"><ele>3011.0</ele></trkpt>
+      <trkpt lat="37.769661" lon="-119.256879"><ele>3093.0</ele></trkpt>
+      <trkpt lat="37.767010" lon="-119.256875"><ele>3125.0</ele></trkpt>
+      <trkpt lat="37.765243" lon="-119.258928"><ele>3195.0</ele></trkpt>
+      <trkpt lat="37.761704" lon="-119.258667"><ele>3207.0</ele></trkpt>
+      <trkpt lat="37.762695" lon="-119.256764"><ele>3194.0</ele></trkpt>
+      <trkpt lat="37.763958" lon="-119.253619"><ele>3247.0</ele></trkpt>
+      <trkpt lat="37.765019" lon="-119.251622"><ele>3287.0</ele></trkpt>
+      <trkpt lat="37.762380" lon="-119.250992"><ele>3314.0</ele></trkpt>
+      <trkpt lat="37.760965" lon="-119.248203"><ele>3378.0</ele></trkpt>
+    </trkseg>
+    <trkseg>
+      <trkpt lat="37.760965" lon="-119.248203"><ele>3378.0</ele></trkpt>
+      <trkpt lat="37.761527" lon="-119.243251"><ele>3286.0</ele></trkpt>
+      <trkpt lat="37.764078" lon="-119.237273"><ele>3194.0</ele></trkpt>
+      <trkpt lat="37.761125" lon="-119.230481"><ele>3164.0</ele></trkpt>
+      <trkpt lat="37.758037" lon="-119.225516"><ele>3129.0</ele></trkpt>
+      <trkpt lat="37.752482" lon="-119.221860"><ele>3088.0</ele></trkpt>
+      <trkpt lat="37.748019" lon="-119.217959"><ele>3038.0</ele></trkpt>
+      <trkpt lat="37.744752" lon="-119.215182"><ele>2979.0</ele></trkpt>
+      <trkpt lat="37.742603" lon="-119.209207"><ele>2942.0</ele></trkpt>
+      <trkpt lat="37.740409" lon="-119.201735"><ele>3031.0</ele></trkpt>
+      <trkpt lat="37.737839" lon="-119.195370"><ele>3098.0</ele></trkpt>
+      <trkpt lat="37.732858" lon="-119.191527"><ele>3115.0</ele></trkpt>
+      <trkpt lat="37.731285" lon="-119.183508"><ele>3106.0</ele></trkpt>
+      <trkpt lat="37.730741" lon="-119.175686"><ele>3066.0</ele></trkpt>
+      <trkpt lat="37.728186" lon="-119.170879"><ele>2996.0</ele></trkpt>
+    </trkseg>
+  </trk>
+</gpx>
