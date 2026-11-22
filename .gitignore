@@ -1,8 +1,23 @@
 node_modules/
 dist/
 .env
+.env.*
 *.log
 .scratch/
 .agents/
 .remember/
 .claude/
+
+# Mobile store signing keys & local machine configs (never commit)
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.p8
+*.pem
+*.mobileprovision
+key.properties
+android/key.properties
+android/local.properties
+google-services.json
+GoogleService-Info.plist

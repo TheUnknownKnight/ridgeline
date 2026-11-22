@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Ridgeline — Backcountry Route Hazard Checker</title>
+  <meta name="description" content="Free, open-source backcountry route hazard checker. Cross-reference US trails and GPX routes against live wildfire, NWS alert, avalanche, river, air-quality, smoke, forecast, and modeled trail conditions.">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#141916">
+  <style>
+    :root {
+      --paper: #141916;
+      --surface: #1d231f;
+      --surface-alt: #232b26;
+      --ink: #e8ece6;
+      --ink-2: #b7c0b9;
+      --ink-3: #8e9891;
+      --rule: #333b36;
+      --contour: #c9a06e;
+      --link: #8ab8ff;
+      --ok: #7fd29a;
+      --font: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--font);
+      font-size: 16px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .wrap {
+      max-width: 780px;
+      margin: 0 auto;
+      padding: 36px 20px 64px;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      padding-bottom: 20px;
+      margin-bottom: 32px;
+      border-bottom: 1px solid var(--rule);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-mark {
+      width: 36px;
+      height: 36px;
+      flex: 0 0 auto;
+      fill: none;
+      stroke: var(--ink);
+      stroke-width: 2.2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .brand-contour { stroke: var(--contour); }
+
+    .brand-title {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: -0.01em;
+    }
+
+    .subtitle {
+      margin: 2px 0 0;
+      font-size: 14px;
+      color: var(--ink-3);
+    }
+
+    nav {
+      display: flex;
+      gap: 16px;
+      font-size: 14px;
+    }
+
+    a {
+      color: var(--link);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    a:hover { opacity: 0.88; }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: 32px;
+      line-height: 1.18;
+      letter-spacing: -0.02em;
+    }
+
+    .lede {
+      margin: 0 0 24px;
+      font-size: 17px;
+      color: var(--ink-2);
+    }
+
+    .ramp {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 6px;
+      margin: 20px 0 28px;
+      text-align: center;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .ramp span {
+      padding: 6px 4px;
+      border-radius: 6px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 14px;
+      margin: 20px 0 28px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--rule);
+      border-radius: 10px;
+      padding: 18px 20px;
+    }
+
+    .card h2 {
+      margin: 0 0 8px;
+      font-size: 17px;
+      color: var(--ink);
+    }
+
+    .card p {
+      margin: 0;
+      font-size: 14px;
+      color: var(--ink-2);
+    }
+
+    h2.sec {
+      margin: 32px 0 10px;
+      font-size: 20px;
+    }
+
+    p {
+      margin: 0 0 14px;
+      color: var(--ink-2);
+    }
+
+    ul {
+      margin: 0 0 16px;
+      padding-left: 22px;
+      color: var(--ink-2);
+    }
+
+    li { margin-bottom: 8px; }
+    strong { color: var(--ink); }
+
+    footer {
+      margin-top: 40px;
+      padding-top: 20px;
+      border-top: 1px solid var(--rule);
+      font-size: 14px;
+      color: var(--ink-3);
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+          <path d="M3 24 L11 11 L16 18 L21 9 L29 24" />
+          <path class="brand-contour" d="M6 28 H26" />
+        </svg>
+        <div>
+          <p class="brand-title">Ridgeline</p>
+          <p class="subtitle">Backcountry Route Hazard Checker</p>
+        </div>
+      </div>
+      <nav aria-label="Links">
+        <a href="privacy.html">Privacy Policy</a>
+        <a href="https://github.com/TheUnknownKnight/ridgeline">GitHub</a>
+        <a href="https://github.com/TheUnknownKnight/ridgeline/issues">Support &amp; Issues</a>
+      </nav>
+    </header>
+
+    <main>
+      <h1>Know what's on the trail before you step onto it.</h1>
+      <p class="lede">
+        Ridgeline is a free, open-source, no-login backcountry hazard checker. Search public
+        US Forest Service &amp; National Park trails — or open any GPX, KML, or GeoJSON track —
+        and cross-reference every mile against live federal hazard feeds and modeled underfoot
+        conditions, with offline support on the trail.
+      </p>
+
+      <div class="ramp" aria-label="Ridgeline 0 to 4 severity scale">
+        <span style="background:#2f9e5b; color:#ffffff;">Clear</span>
+        <span style="background:#d9a400; color:#1d2622;">Low</span>
+        <span style="background:#ee7a14; color:#1d2622;">Moderate</span>
+        <span style="background:#dc3a1c; color:#ffffff;">High</span>
+        <span style="background:#9e1650; color:#ffffff;">Extreme</span>
+      </div>
+
+      <section class="grid" aria-label="Key capabilities">
+        <article class="card">
+          <h2>8 Live Data Streams</h2>
+          <p>NIFC wildfires, NWS alerts &amp; gridded forecasts, Avalanche.org zones, NOAA river gauges, EPA AirNow PM2.5, NOAA smoke forecasts, and a physical snow/ice/mud trail model.</p>
+        </article>
+        <article class="card">
+          <h2>Offline On-Trail Cockpit</h2>
+          <p>Save corridor topo tiles and your latest briefing before leaving service. Track trail progress, next hazard ahead, remaining climb, local sunset, and SOS coordinates offline.</p>
+        </article>
+        <article class="card">
+          <h2>Private &amp; Open Source</h2>
+          <p>No accounts, no ads, no analytics, and no server-side user database. Your device fetches public federal data directly and stores saved routes locally.</p>
+        </article>
+      </section>
+
+      <h2 class="sec" id="support">Support &amp; Bug Reports</h2>
+      <p>
+        Found an inaccurate hazard reading, a broken trail geometry, or a mobile issue? Ridgeline
+        treats false positives and bad readings as high-priority bugs.
+      </p>
+      <ul>
+        <li><strong>Report a bug or inaccurate reading:</strong> open an issue at <a href="https://github.com/TheUnknownKnight/ridgeline/issues">github.com/TheUnknownKnight/ridgeline/issues</a> (include the trail name/mile and screenshot if possible).</li>
+        <li><strong>Privacy &amp; backcountry safety:</strong> read the full <a href="privacy.html">Privacy Policy &amp; Backcountry Safety Notice</a>.</li>
+        <li><strong>Source code:</strong> audited and licensed under AGPL-3.0-or-later at <a href="https://github.com/TheUnknownKnight/ridgeline">github.com/TheUnknownKnight/ridgeline</a>.</li>
+      </ul>
+    </main>
+
+    <footer>
+      <span>Ridgeline (com.nickb.ridgeline) &middot; Free &amp; Open Source (AGPL-3.0-or-later)</span>
+      <span><a href="privacy.html">Privacy</a> &middot; <a href="endpoints.json">Endpoints</a></span>
+    </footer>
+  </div>
+</body>
+</html>
