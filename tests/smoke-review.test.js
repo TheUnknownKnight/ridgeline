@@ -4,7 +4,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { loadAir } from '../server/sources/airnow.js';
+import { loadAir, filterOutlierMonitors } from '../server/sources/airnow.js';
 import { parseHmsKml } from '../server/sources/hms.js';
 import { loadSmoke } from '../server/sources/smokeForecast.js';
 import { detectAir } from '../server/fusion/detectors/air.js';
@@ -191,4 +191,78 @@ test('HMS KML scanning stays linear on a corrupt file', () => {
   const t = Date.now();
   assert.deepEqual(parseHmsKml(corrupt).plumes, []);
   assert.ok(Date.now() - t < 1000);
+});
+
+test('air: distant contours and plumes inside a diagonal route bounding box stay off the map', async () => {
+  // Diagonal 100-mile SW->NE trail whose rectangular bbox encloses far-away western valleys.
+  const coords = Array.from({ length: 101 }, (_, i) => [LON + dLon(i * 0.7), LAT0 + dLat(i * 0.7)]);
+  const { getRouteModel } = await import('../server/fusion/route.js');
+  const route = await getRouteModel(validateAnalyzeRequest({ coordinates: coords }));
+  // Polygon in the NW corner of the route's bbox, ~50 miles away from the diagonal trail.
+  const farLon = LON + dLon(2);
+  const farLat = LAT0 + dLat(68);
+  const farPoly = {
+    type: 'Polygon',
+    coordinates: [[
+      [farLon - 0.05, farLat - 0.05], [farLon + 0.05, farLat - 0.05],
+      [farLon + 0.05, farLat + 0.05], [farLon - 0.05, farLat + 0.05], [farLon - 0.05, farLat - 0.05],
+    ]],
+  };
+  const farContour = prepared(farPoly, { category: 5, at: Date.now() });
+  const farPlume = { density: 'heavy', start: Date.now() - 3600e3, end: Date.now() - 1800e3, ...prepared(farPoly) };
+  // Polygon 5 miles from the midpoint of the trail: stays for nearby context.
+  const nearLon = LON + dLon(35) - dLon(5);
+  const nearLat = LAT0 + dLat(35);
+  const nearContour = prepared({
+    type: 'Polygon',
+    coordinates: [[
+      [nearLon - 0.02, nearLat - 0.02], [nearLon + 0.02, nearLat - 0.02],
+      [nearLon + 0.02, nearLat + 0.02], [nearLon - 0.02, nearLat + 0.02], [nearLon - 0.02, nearLat - 0.02],
+    ]],
+  }, { category: 3, at: Date.now() });
+
+  const r = detectAir(route, { contours: [goodAir(), farContour, nearContour], monitors: [], plumes: [farPlume] }, {});
+  const areas = r.overlays.filter(o => o.properties.overlay === 'air-area');
+  assert.equal(areas.length, 1, 'only the near-trail contour is rendered');
+  assert.equal(areas[0].properties.category, 3);
+  assert.equal(r.overlays.filter(o => o.properties.overlay === 'smoke-plume').length, 0, 'distant smoke plume stays off the map');
+});
+
+test('air: isolated extreme single-station spike surrounded by Good monitors is suppressed, along with contradicted contours', async () => {
+  const now = Date.now();
+  // Metro sensor glitch (San Jose Knox Ave pattern): one monitor spikes to 260 while 2 neighbors 3-5 mi away read 18 and 24.
+  const glitch = { id: 'GLITCH', name: 'Knox Ave', aqi: 260, pm25: 210, category: 5, at: now, lon: LON, lat: LAT0 + dLat(5) };
+  const good1 = { id: 'G1', name: 'Jackson St', aqi: 24, pm25: 5, category: 1, at: now, lon: LON + dLon(3), lat: LAT0 + dLat(5) };
+  const good2 = { id: 'G2', name: 'Valley', aqi: 18, pm25: 4, category: 1, at: now, lon: LON - dLon(4), lat: LAT0 + dLat(5) };
+  const filtered = filterOutlierMonitors([glitch, good1, good2]);
+  assert.equal(filtered.find(m => m.id === 'GLITCH').aqi, null, 'isolated metro spike is nulled');
+  assert.equal(filtered.find(m => m.id === 'GLITCH').outlier, true);
+
+  // Lone backcountry fire-camp monitor with no nearby Good stations is NEVER suppressed.
+  const remote = { id: 'FIRE', name: 'Fire camp', aqi: 260, pm25: 210, category: 5, at: now, lon: LON + dLon(50), lat: LAT0 + dLat(50) };
+  assert.equal(filterOutlierMonitors([remote, good1, good2]).find(m => m.id === 'FIRE').aqi, 260);
+
+  // Contradicted Unhealthy+ contour (category 5) with 2+ live Good monitors inside it and 0 unhealthy monitors nearby is dropped.
+  const route = await buildRoute(10);
+  const badBlob = prepared(boxPolygon(3, 7, { widthMiles: 10 }), { category: 5, at: now });
+  const r = detectAir(route, { contours: [goodAir(), badBlob], monitors: [good1, good2], plumes: [] }, { now });
+  assert.equal(r.hazards.length, 0, 'contradicted contour artifact does not fire a hazard');
+  assert.equal(r.overlays.filter(o => o.properties.overlay === 'air-area').length, 0);
+});
+
+test('air: hazard cites the monitor nearest the affected stretch (not one 50 miles away) and prefers direct on-trail monitors', async () => {
+  const route = await buildRoute(60);
+  const now = Date.now();
+  const contour = prepared(boxPolygon(48, 56, { widthMiles: 4 }), { category: 3, at: now });
+  const farGood = { id: 'BAN', name: 'Banning', agency: 'SCAQMD', aqi: 23, category: 1, at: now, lon: LON + dLon(0.05), lat: LAT0 + dLat(2) };
+  const nearUsg = { id: 'POR', name: 'Portola', agency: 'NSAQMD', aqi: 125, category: 3, at: now, lon: LON + dLon(6), lat: LAT0 + dLat(52) };
+  const r = detectAir(route, { contours: [goodAir(), contour], monitors: [farGood, nearUsg], plumes: [] }, { now });
+  assert.equal(r.hazards.length, 1);
+  assert.match(r.hazards[0].detail, /Portola/, 'cites monitor near the unhealthy stretch');
+  assert.doesNotMatch(r.hazards[0].detail, /Banning/, 'never cites a clean monitor 50 miles away');
+
+  // If the USG monitor sits within 3 mi of the trail, prefer its direct reading over the smoothed contour at equal level.
+  const onTrailUsg = { ...nearUsg, lon: LON + dLon(1.5), lat: LAT0 + dLat(52) };
+  const rDirect = detectAir(route, { contours: [goodAir(), contour], monitors: [farGood, onTrailUsg], plumes: [] }, { now });
+  assert.match(rDirect.hazards[0].detail, /measured at Portola/);
 });

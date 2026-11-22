@@ -3,7 +3,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sunHour } from '../shared/conditions/solar.js';
+import { sunHour, slopeNormal, irradianceOnSlope } from '../shared/conditions/solar.js';
 import { runPoint } from '../shared/conditions/model.js';
 import { classifyReading, dayTiming, toStretches, CONDITIONS } from '../shared/conditions/classify.js';
 import { detectConditions } from '../server/fusion/conditions.js';
@@ -106,4 +106,104 @@ test('detectConditions lines up weather cells fetched on different UTC days', as
   const r = detectConditions(route, data, { now, timeZone: 'America/Los_Angeles' });
   assert.ok(r.block, 'both cells aligned onto one axis');
   assert.equal(r.checkedChunks.size, route.chunks.length);
+});
+
+test('crust only forms when liquid meltwater refreezes, never on continuously cold dry snow', () => {
+  const cold = forcing(3, () => ({ Ta: -8, Td: -15, cloud: 0 }));
+  const meltFreeze = forcing(3, (d, hr) => ({ Ta: diurnal(-6, 7)(hr), Td: -8, cloud: 0 }));
+  const pt = { elevM: 2500, slopeDeg: 0, aspectDeg: -1, canopy: 0, surface: 'rock' };
+  const dryR = runPoint(pt, cold, { seed: { atIndex: 0, sweMm: 200 }, reads: [idx(2, 5)] }).get(idx(2, 5));
+  const mfR = runPoint(pt, meltFreeze, { seed: { atIndex: 0, sweMm: 200 }, reads: [idx(2, 5)] }).get(idx(2, 5));
+  assert.equal(dryR.crust, 0);
+  assert.ok(mfR.crust > 0.2, `expected refreeze crust after warm day, got ${mfR.crust}`);
+});
+
+test('sub-zero clear sun melts steep south snow while steep north slope stays frozen', () => {
+  const f = forcing(2, (d, hr) => ({ Ta: -2, Td: -12, cloud: 0 }));
+  const south = { elevM: 2500, slopeDeg: 35, aspectDeg: 180, canopy: 0, surface: 'rock' };
+  const north = { elevM: 2500, slopeDeg: 35, aspectDeg: 0, canopy: 0, surface: 'rock' };
+  const sr = runPoint(south, f, { seed: { atIndex: 0, sweMm: 100 }, reads: [idx(1, 16)] }).get(idx(1, 16));
+  const nr = runPoint(north, f, { seed: { atIndex: 0, sweMm: 100 }, reads: [idx(1, 16)] }).get(idx(1, 16));
+  assert.ok(sr.snowmelt24hMm > nr.snowmelt24hMm, `south melt ${sr.snowmelt24hMm} should exceed north ${nr.snowmelt24hMm}`);
+});
+
+test('tree canopy reduces nighttime radiative snow-crust refreezing compared to open alpine', () => {
+  const f = forcing(3, (d, hr) => ({ Ta: hr < 7 || hr > 18 ? 1 : 6, Td: -5, cloud: 0 }));
+  f.wind = new Array(72).fill(0);
+  const open = { elevM: 2500, slopeDeg: 0, aspectDeg: -1, canopy: 0, surface: 'rock' };
+  const woods = { elevM: 2500, slopeDeg: 0, aspectDeg: -1, canopy: 0.85, surface: 'forest' };
+  const rOpen = runPoint(open, f, { seed: { atIndex: 0, sweMm: 200 }, reads: [idx(2, 5)] }).get(idx(2, 5));
+  const rWoods = runPoint(woods, f, { seed: { atIndex: 0, sweMm: 200 }, reads: [idx(2, 5)] }).get(idx(2, 5));
+  assert.ok(rOpen.crust > rWoods.crust, `open crust ${rOpen.crust} should exceed forest crust ${rWoods.crust}`);
+});
+
+test('horizon shadow blocks direct beam; overcast diffuse light stays aspect-symmetric', () => {
+  const morningSun = sunHour(Date.UTC(2026, 9, 8, 16), 37.7, -119.4, 2500);
+  const flat = slopeNormal(0, -1);
+  const sector = Math.floor((morningSun.azimuth % 360) / 45);
+  const ring = Array(8).fill(0);
+  ring[sector] = 50;
+  ring[(sector + 1) % 8] = 50;
+  const unblocked = irradianceOnSlope(morningSun, flat, { cloud: 0, horizonDeg: Array(8).fill(0) });
+  const blocked = irradianceOnSlope(morningSun, flat, { cloud: 0, horizonDeg: ring });
+  assert.equal(unblocked.blocked, false);
+  assert.ok(unblocked.beam > 150);
+  assert.equal(blocked.blocked, true);
+  assert.equal(blocked.beam, 0);
+  assert.ok(blocked.total < unblocked.total);
+
+  const noonSun = sunHour(Date.UTC(2026, 9, 8, 20), 37.7, -119.4, 2500);
+  const s30 = irradianceOnSlope(noonSun, slopeNormal(30, 180), { cloud: 100, slopeDeg: 30 });
+  const n30 = irradianceOnSlope(noonSun, slopeNormal(30, 0), { cloud: 100, slopeDeg: 30 });
+  assert.ok(Math.abs(s30.diffuse - n30.diffuse) < 1e-6);
+});
+
+test('humid clear night condenses frost/verglas (ice) or warm morning dew (slick)', () => {
+  const freezeNight = forcing(2, (d, hr) => ({ Ta: hr < 8 ? 0.5 : -2, Td: -0.5, cloud: 0 }));
+  freezeNight.wind = new Array(48).fill(0);
+  const rock = { elevM: 2500, slopeDeg: 10, aspectDeg: 0, canopy: 0, surface: 'rock' };
+  const rIce = runPoint(rock, freezeNight, { reads: [idx(1, 5)] }).get(idx(1, 5));
+  assert.ok(rIce.groundIceMm > 0.05 || rIce.frostMm >= 0.08, JSON.stringify(rIce));
+  const cIce = classifyReading(rock, rIce);
+  assert.ok(cIce.some(c => c.code === 'ice'), `expected ice from frost/verglas, got ${JSON.stringify(cIce)}`);
+
+  const warmDew = forcing(2, () => ({ Ta: 6, Td: 5.8, cloud: 0 }));
+  warmDew.wind = new Array(48).fill(0);
+  const dirt = { elevM: 2500, slopeDeg: 0, aspectDeg: -1, canopy: 0, surface: 'dirt' };
+  const rDew = runPoint(dirt, warmDew, { reads: [idx(1, 5)] }).get(idx(1, 5));
+  assert.ok(rDew.dewWet >= 0.5, JSON.stringify(rDew));
+  const cDew = classifyReading(dirt, rDew);
+  assert.ok(cDew.some(c => (c.code === 'wet' || c.code === 'slick') && c.why.some(w => /dew/i.test(w))), JSON.stringify(cDew));
+});
+
+test('stretches split sustained winter elevation/snow-tier transitions while merging single switchbacks', () => {
+  const at = (m, elevM) => ({ mile: m, mileFrom: m - 0.5, mileTo: m + 0.5, elevM, slopeDeg: 15, aspectDeg: 180 });
+  const points = [
+    at(0.5, 3100), at(1.5, 3100), at(2.5, 3100), at(3.5, 3100),
+    at(4.5, 2200), at(5.5, 2200), at(6.5, 2200),
+  ];
+  const conds = [
+    ...Array(4).fill([{ code: 'snow-deep', likely: true, depthIn: 30, why: [] }]),
+    ...Array(3).fill([{ code: 'snow-patchy', likely: false, depthIn: 2, why: [] }]),
+  ];
+  const s = toStretches(points, conds);
+  assert.equal(s.length, 2, 'sustained 900 m drop splits deep winter snow from patchy snow');
+  assert.equal(s[0].mileEnd, 4);
+  assert.equal(s[1].mileStart, 4);
+});
+
+test('detectConditions: trace sub-0.5cm dusting and dry-ground morning frost stay in stretches without firing top-level hazards', async () => {
+  const route = await buildRoute(2);
+  const now = T0 + 1 * 24 * HOUR + 5 * HOUR;
+  // Clear humid freezing night on dry rock (frost only, no rain/wetness -> frost-only ice reading)
+  const frostCell = forcing(4, (d, hr) => ({ Ta: hr < 8 ? 0.4 : 4, Td: -0.2, cloud: 0 }));
+  frostCell.wind = new Array(96).fill(0);
+  const points = [0.5, 1.5].map(mile => ({ mile, mileFrom: mile - 0.5, mileTo: mile + 0.5, lat: LAT0 + dLat(mile), lon: LON, ele: null }));
+  const data = {
+    points, cellOf: ['c', 'c'], cells: new Map([['c', frostCell]]), spacing: 1,
+    terrain: points.map(() => ({ slopeDeg: 5, aspectDeg: 0, elevationM: 2500, canopy: 0, nlcd: 31 })),
+    snow: points.map(() => 0), snowValidAt: T0, confidence: { weather: 'ok', terrain: 'ok', snow: 'ok' },
+  };
+  const r = detectConditions(route, data, { now, timeZone: 'America/Los_Angeles' });
+  assert.equal(r.hazards.some(h => h.id === 'trail:ice'), false, 'dry-ground morning frost does not fire a top-level ice hazard');
 });

@@ -1,3 +1,5 @@
+import { haversineMiles, padBbox } from '../../shared/geo.js';
+import { endpointUrl } from '../config.js';
 import { sourceCache } from '../lib/cache.js';
 import { queryAllGeoJson } from '../lib/arcgis.js';
 import { prepPolygons, polygonsBbox } from '../lib/spatial.js';
@@ -29,8 +31,14 @@ const READINGS_STALE_MS = 3 * 60 * 60 * 1000;
 const READINGS_DEAD_MS = 12 * 60 * 60 * 1000;
 // A monitor that misses an hour ("ND", common for temporary fire monitors)
 // keeps its last reading this long instead of vanishing: a gap in a monitor
-// must not read as cleaner air.
-const CARRY_MS = 3 * 60 * 60 * 1000;
+// must not read as cleaner air. Cap at 2 h so QA-pulled faults expire quickly.
+const CARRY_MS = 2 * 60 * 60 * 1000;
+// Single-station extreme sensor-fault guard: an isolated AQI >= 201 spike
+// surrounded by >= 2 Good (<= 50) active monitors within 10 mi is suppressed.
+const OUTLIER_AQI_MIN = 201;
+const OUTLIER_NEIGHBOR_MILES = 10;
+const OUTLIER_MIN_NEIGHBORS = 2;
+const OUTLIER_GOOD_MAX_AQI = 50;
 const PLUME_BUDGET_MS = 2500;
 
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
@@ -54,7 +62,9 @@ const normalizeMonitor = (f) => {
   const p = f.properties || {};
   const c = f.geometry?.type === 'Point' ? f.geometry.coordinates : null;
   let aqi = num(p.PM25_AQI);
-  if (aqi != null && aqi < 0) aqi = null; // "ND": no data this hour
+  if (aqi != null && (aqi < 0 || aqi > 500)) aqi = null; // "ND" or corrupt sensor sentinel
+  let pm25 = num(p.PM25);
+  if (pm25 != null && (pm25 < 0 || pm25 > 2000)) pm25 = null;
   if (!c || !Number.isFinite(c[0]) || !Number.isFinite(c[1])) return null;
   if (p.Status && String(p.Status).toLowerCase() !== 'active') return null;
   const site = String(p.SiteName || '').trim();
@@ -64,12 +74,37 @@ const normalizeMonitor = (f) => {
     name: site && site !== p.AQSID ? site : `${p.DataSource || 'Temporary'} monitor`,
     agency: p.DataSource ? String(p.DataSource) : null,
     aqi,
-    pm25: num(p.PM25),
+    pm25,
     category: aqi == null ? null : categoryOfAqi(aqi),
     at: num(p.ValidTime) != null ? num(p.ValidTime) * (p.ValidTime < 1e12 ? 1000 : 1) : null,
     lon: c[0],
     lat: c[1],
   };
+};
+
+/**
+ * Suppress isolated single-station extreme sensor faults (AQI >= 201) when at
+ * least two other active monitors within 10 miles all read Good (AQI <= 50).
+ * Remote fire-camp monitors without multiple nearby Good stations are untouched.
+ */
+export const filterOutlierMonitors = (monitors) => {
+  const active = monitors.filter(m => m.aqi != null);
+  return monitors.map(m => {
+    if (m.aqi == null || m.aqi < OUTLIER_AQI_MIN) return m;
+    let neighbors = 0;
+    let allGood = true;
+    for (const o of active) {
+      if (o.id === m.id) continue;
+      if (Math.abs(o.lat - m.lat) > 0.2 || Math.abs(o.lon - m.lon) > 0.3) continue;
+      if (haversineMiles(m.lon, m.lat, o.lon, o.lat) > OUTLIER_NEIGHBOR_MILES) continue;
+      neighbors++;
+      if (o.aqi > OUTLIER_GOOD_MAX_AQI) { allGood = false; break; }
+    }
+    if (neighbors >= OUTLIER_MIN_NEIGHBORS && allGood) {
+      return { ...m, aqi: null, pm25: null, category: null, outlier: true };
+    }
+    return m;
+  });
 };
 
 /** Last good reading per monitor (AQSID), so an "ND" hour carries it forward. */
@@ -79,6 +114,11 @@ const carryForward = (monitors, now) => {
   for (const [id, r] of lastReadings) if (now - r.at > CARRY_MS) lastReadings.delete(id);
   const out = [];
   for (const m of monitors) {
+    if (m.outlier) {
+      // Never revive an older reading for a sensor currently faulting.
+      lastReadings.delete(m.id);
+      continue;
+    }
     if (m.aqi != null && Number.isFinite(m.at)) {
       lastReadings.set(m.id, { aqi: m.aqi, pm25: m.pm25, category: m.category, at: m.at });
       out.push(m);
@@ -89,27 +129,50 @@ const carryForward = (monitors, now) => {
   return out;
 };
 
-const fetchAirNow = async () => {
+const CORRIDOR_PAD_MILES = 30;
+
+const corridorEnvelope = (bbox, padMiles) => {
+  const [w, s, e, n] = padBbox(bbox, padMiles);
+  const xmin = Math.max(-180, Math.floor(w * 100) / 100);
+  const ymin = Math.max(-90, Math.floor(s * 100) / 100);
+  const xmax = Math.min(180, Math.ceil(e * 100) / 100);
+  const ymax = Math.min(90, Math.ceil(n * 100) / 100);
+  return {
+    cacheKey: `${xmin.toFixed(2)},${ymin.toFixed(2)},${xmax.toFixed(2)},${ymax.toFixed(2)}`,
+    params: {
+      geometry: JSON.stringify({ xmin, ymin, xmax, ymax, spatialReference: { wkid: 4326 } }),
+      geometryType: 'esriGeometryEnvelope',
+      spatialRel: 'esriSpatialRelIntersects',
+      inSR: '4326',
+    },
+  };
+};
+
+const fetchAirNow = async ({ spatialParams = {}, corridor = false } = {}) => {
+  const contoursUrl = endpointUrl('airnowContours', CONTOURS_URL);
+  const monitorsUrl = endpointUrl('airnowMonitors', MONITORS_URL);
   const [rawContours, rawMonitors] = await Promise.all([
-    queryAllGeoJson(CONTOURS_URL, {
+    queryAllGeoJson(contoursUrl, {
       where: '1=1',
       outFields: 'gridcode,Timestamp',
       returnGeometry: 'true',
       maxAllowableOffset: '0.005',
       geometryPrecision: '4',
+      ...spatialParams,
     }, 'AirNow contours'),
-    queryAllGeoJson(MONITORS_URL, {
+    queryAllGeoJson(monitorsUrl, {
       where: '1=1',
       outFields: 'AQSID,SiteName,DataSource,PM25,PM25_AQI,ValidTime,Status',
       returnGeometry: 'true',
       geometryPrecision: '4',
+      ...spatialParams,
     }, 'AirNow monitors'),
   ]);
   const contours = rawContours.map(normalizeContour).filter(Boolean);
-  const monitors = carryForward(rawMonitors.map(normalizeMonitor).filter(Boolean), Date.now());
+  const monitors = carryForward(filterOutlierMonitors(rawMonitors.map(normalizeMonitor).filter(Boolean)), Date.now());
   // The contours cover most of the lower 48 (mostly "good", with gaps far from
   // any monitor); none at all is an upstream glitch.
-  if (!contours.length) throw new Error('AirNow returned no contours nationwide');
+  if (!corridor && !contours.length) throw new Error('AirNow returned no contours nationwide');
   const at = contours.map(c => c.at).filter(Boolean);
   return { contours, monitors, validAt: at.length ? Math.max(...at) : null };
 };
@@ -143,18 +206,37 @@ const failed = (message, plumes) => ({
   data: { contours: [], monitors: [], validAt: null, plumes: plumes.data?.plumes || [] },
 });
 
-/** Nationwide AirNow contours + monitors (+ NOAA satellite smoke plumes for the map). */
-export const loadAir = async ({ now = Date.now() } = {}) => {
+/** Nationwide (or route-corridor) AirNow contours + monitors (+ NOAA satellite smoke plumes). */
+export const loadAir = async ({ route, now = Date.now(), scope = 'nationwide' } = {}) => {
   const plumesPromise = boundedPlumes(now);
+  const corridor = scope === 'corridor' && Boolean(route?.paddedBbox);
+  const env = corridor ? corridorEnvelope(route.paddedBbox, CORRIDOR_PAD_MILES) : null;
+  const cacheKey = env ? `airnow:corridor:${env.cacheKey}` : 'airnow:all';
   let cached;
   try {
-    cached = await sourceCache.wrap('airnow:all', { ttlMs: TTL_MS, revalidateMs: REVALIDATE_MS, staleMs: STALE_MS }, fetchAirNow);
+    cached = await sourceCache.wrap(
+      cacheKey,
+      { ttlMs: TTL_MS, revalidateMs: REVALIDATE_MS, staleMs: STALE_MS },
+      () => fetchAirNow({ spatialParams: env ? env.params : {}, corridor }),
+    );
   } catch (err) {
     console.error('[airnow] load failed:', err.message);
     return failed('Measured air quality unavailable — smoke at ground level could not be checked.', await plumesPromise);
   }
   const plumes = await plumesPromise;
   const { value, fetchedAt, stale } = cached;
+  if (corridor && value.contours.length === 0 && value.monitors.length === 0) {
+    return {
+      status: stale ? 'stale' : 'ok',
+      fetchedAt: new Date(fetchedAt).toISOString(),
+      validAt: null,
+      message: `No AirNow monitors or contours near route.${plumeNote(plumes)}`,
+      attribution: ATTRIBUTION,
+      url: SOURCE_URL,
+      plumesStatus: plumes.status,
+      data: { ...value, monitors: [], validAt: null, plumes: plumes.data?.plumes || [] },
+    };
+  }
   const newestMonitor = Math.max(0, ...value.monitors.map(m => m.at || 0));
   const validAt = value.validAt || newestMonitor || null;
   const ageMs = validAt ? now - validAt : Infinity;
@@ -173,7 +255,7 @@ export const loadAir = async ({ now = Date.now() } = {}) => {
     validAt: new Date(validAt).toISOString(),
     message: (old
       ? `AirNow's latest readings are from ${hours} h ago — they may not show current smoke.`
-      : `Hourly PM2.5 from ${monitors.length} monitors nationwide.`) + plumeNote(plumes),
+      : `Hourly PM2.5 from ${monitors.length} monitors ${corridor ? 'near route' : 'nationwide'}.`) + plumeNote(plumes),
     attribution: ATTRIBUTION,
     url: SOURCE_URL,
     plumesStatus: plumes.status,

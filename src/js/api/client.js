@@ -1,8 +1,12 @@
 /**
- * POST /api/analyze. The first check of a route in this session uploads its
- * coordinates; later checks send only the route hash, so On trail refreshes
- * stay small on a weak signal. If the server has forgotten the route
- * (restart, eviction) it answers 409 and we upload once more.
+ * Route analysis client.
+ * - In regular browsers, calls POST /api/analyze: the first check of a route
+ *   in this session uploads its coordinates; later checks send only the route
+ *   hash, so On trail refreshes stay small on a weak signal (retrying once on
+ *   409 if the server evicted the route).
+ * - In Capacitor native runtimes (or when a custom runner is registered via
+ *   `setAnalysisRunner`), runs on-device via `analyzeLocally` with full
+ *   coordinates on every check (no backend server, never 409).
  */
 
 const ENDPOINT = '/api/analyze';
@@ -21,6 +25,18 @@ const MESSAGES = {
 
 /** Route ids the server has accepted coordinates for during this session. */
 const uploaded = new Set();
+
+/** Optional custom analysis runner (e.g. native bridge or tests). */
+let customRunner = null;
+
+/** True when running inside a Capacitor native iOS/Android shell. */
+export const isNativeRuntime = () =>
+  typeof window !== 'undefined' && Boolean(window.Capacitor?.isNativePlatform?.());
+
+/** Register a custom analysis runner `(payload, { signal }) => Promise<Analysis>`. Pass null to reset. */
+export const setAnalysisRunner = (fn) => {
+  customRunner = typeof fn === 'function' ? fn : null;
+};
 
 export class AnalysisError extends Error {
   constructor(message, { status = 0, code = 'unknown', retryAfterSec = null } = {}) {
@@ -53,6 +69,19 @@ const transportError = (err, callerSignal, signal) => {
   if (callerSignal?.aborted) return err;
   if (signal.aborted) return new AnalysisError(MESSAGES.timeout, { code: 'timeout' });
   return new AnalysisError(MESSAGES.offline, { code: 'offline' });
+};
+
+const raceAbort = (promise, abortSignal) => {
+  if (!abortSignal) return promise;
+  if (abortSignal.aborted) return Promise.reject(abortSignal.reason ?? new DOMException('Aborted', 'AbortError'));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(abortSignal.reason ?? new DOMException('Aborted', 'AbortError'));
+    abortSignal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => { abortSignal.removeEventListener('abort', onAbort); resolve(value); },
+      (err) => { abortSignal.removeEventListener('abort', onAbort); reject(err); },
+    );
+  });
 };
 
 const parseJson = (text) => {
@@ -101,6 +130,23 @@ const post = async (payload, signal, callerSignal) => {
   return body;
 };
 
+const runLocal = async (runner, payload, signal, callerSignal) => {
+  let body;
+  try {
+    body = await raceAbort(Promise.resolve().then(() => runner(payload, { signal })), signal);
+  } catch (err) {
+    if (callerSignal?.aborted) throw err;
+    if (err instanceof AnalysisError) throw err;
+    if (signal.aborted) throw new AnalysisError(MESSAGES.timeout, { code: 'timeout' });
+    if (err?.name === 'ValidationError') {
+      throw new AnalysisError(err.message || MESSAGES.rejected, { status: 400, code: err.code || 'invalid_request' });
+    }
+    throw new AnalysisError(err?.message || MESSAGES.server, { code: err?.code || 'local_error' });
+  }
+  if (!isAnalysis(body)) throw new AnalysisError(MESSAGES.unexpected, { status: 200, code: 'bad_response' });
+  return body;
+};
+
 const clampLookahead = (miles) => Math.round(Math.min(LOOKAHEAD_MAX, Math.max(LOOKAHEAD_MIN, Number(miles) || 15)));
 
 /**
@@ -108,10 +154,20 @@ const clampLookahead = (miles) => Math.round(Math.min(LOOKAHEAD_MAX, Math.max(LO
  * On trail mode, otherwise null. Rejects with AnalysisError (plain-language
  * message) or, when the caller aborts, with the caller's AbortError.
  */
-export const analyzeRoute = async ({ route, location = null, lookaheadMiles = 15, signal } = {}) => {
+export const analyzeRoute = async ({ route, location = null, lookaheadMiles = 15, trip = null, refresh = false, signal } = {}) => {
   const link = linkSignal(signal);
-  const shared = { location: location || null, lookaheadMiles: clampLookahead(lookaheadMiles) };
+  const shared = { location: location || null, lookaheadMiles: clampLookahead(lookaheadMiles), ...(trip ? { trip } : {}), ...(refresh ? { refresh: true } : {}) };
   try {
+    const runner = customRunner || (isNativeRuntime()
+      ? async (payload, opts) => {
+        const { analyzeLocally } = await import('../engine/localEngine.js');
+        return analyzeLocally(payload, opts);
+      }
+      : null);
+    if (runner) {
+      return await runLocal(runner, { coordinates: route.coords, name: route.name, ...shared }, link.signal, signal);
+    }
+
     if (uploaded.has(route.id)) {
       try {
         return await post({ routeHash: route.id, ...shared }, link.signal, signal);

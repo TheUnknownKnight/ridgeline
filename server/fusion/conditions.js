@@ -1,4 +1,4 @@
-import { pointAtMile } from '../../shared/geo.js';
+import { pointAtMile, haversineMiles } from '../../shared/geo.js';
 import { sunHour } from '../../shared/conditions/solar.js';
 import { runPoint } from '../../shared/conditions/model.js';
 import { surfaceFromLandCover } from '../../shared/conditions/surfaces.js';
@@ -22,9 +22,13 @@ export const ATTRIBUTION = 'Ridgeline model from Open-Meteo weather, LANDFIRE te
 const MAX_POINTS = 2000;
 const GRID_STEP = 0.25;
 // Terrain and the snow analysis improve the estimate but must never hold it up.
-const OPTIONAL_INPUT_BUDGET_MS = 8000;
+// Both have 13.5 s internal soft budgets so completed layers/tiles are preserved.
+const OPTIONAL_INPUT_SOFT_MS = 13500;
+const OPTIONAL_INPUT_BUDGET_MS = 14500;
 // A file elevation this far from the terrain model is a unit or data error: trust the terrain.
 const ELEVATION_MISMATCH_M = 300;
+const CM_TO_IN = 1 / 2.54;
+const M_TO_FT = 3.28084;
 
 /** Sample spacing: 0.25 mi, or a multiple of it on long routes (so every sample sits on one route-wide grid). */
 export const conditionsSpacing = (spanMiles) => Math.max(GRID_STEP, Math.ceil(spanMiles / MAX_POINTS / GRID_STEP) * GRID_STEP);
@@ -59,10 +63,22 @@ const gridPoints = (route, range, spacing) => {
   });
 };
 
+/** Pick the fetched cell closest in horizontal distance + vertical elevation (200 m ≈ 1 mi). */
+const bestBorrowedCell = (point, pointElevM, candidates) => {
+  let bestKey = candidates[0].key;
+  let bestCost = Infinity;
+  for (const c of candidates) {
+    let cost = haversineMiles(c.lon, c.lat, point.lon, point.lat);
+    if (pointElevM != null && c.elevation != null) cost += Math.abs(pointElevM - c.elevation) / 200;
+    if (cost < bestCost) { bestCost = cost; bestKey = c.key; }
+  }
+  return bestKey;
+};
+
 /**
  * Gather the inputs. Weather cells are capped (Open-Meteo quota): beyond
- * MAX_CELLS, points borrow the nearest fetched cell along the route — the
- * lapse correction to each point's own elevation still applies.
+ * MAX_CELLS, points borrow the closest matching fetched cell in space and
+ * elevation — lapse correction to each point's own elevation still applies.
  */
 export const loadConditions = async ({ route, range, now = Date.now(), timeZone = null }) => {
   const spacing = conditionsSpacing(Math.max(0.01, range.end - range.start));
@@ -71,22 +87,26 @@ export const loadConditions = async ({ route, range, now = Date.now(), timeZone 
   const order = [...new Set(ownKeys)];
   const picked = pickEvenly(order.length, MAX_CELLS).map(i => order[i]);
   const pickedSet = new Set(picked);
-  const rank = new Map(order.map((k, i) => [k, i]));
-  const pickedRanks = picked.map(k => rank.get(k));
-  const cellOf = ownKeys.map((k) => {
-    if (pickedSet.has(k)) return k;
-    const r = rank.get(k);
-    let best = 0;
-    for (let j = 1; j < pickedRanks.length; j++) if (Math.abs(pickedRanks[j] - r) < Math.abs(pickedRanks[best] - r)) best = j;
-    return picked[best];
-  });
 
   const [terrain, snow, weather, zone] = await Promise.all([
-    withBudget(loadTerrain({ points }), OPTIONAL_INPUT_BUDGET_MS, { status: 'error', byPoint: points.map(() => null), failedLayers: ['timeout'] }),
-    withBudget(loadSnow({ points }), OPTIONAL_INPUT_BUDGET_MS, { status: 'error', validAt: null, byPoint: points.map(() => null) }),
+    withBudget(loadTerrain({ points, budgetMs: OPTIONAL_INPUT_SOFT_MS }), OPTIONAL_INPUT_BUDGET_MS, { status: 'error', byPoint: points.map(() => null), failedLayers: ['timeout'] }),
+    withBudget(loadSnow({ points, budgetMs: OPTIONAL_INPUT_SOFT_MS }), OPTIONAL_INPUT_BUDGET_MS, { status: 'error', validAt: null, byPoint: points.map(() => null) }),
     loadCells(picked),
     timeZone ? Promise.resolve(timeZone) : withBudget(loadTimeZone(points[0].lat, points[0].lon), 4000, null),
   ]);
+
+  const candidates = picked
+    .filter(key => weather.cells.get(key))
+    .map((key) => {
+      const [lat, lon] = key.split(',').map(Number);
+      return { key, lat, lon, elevation: weather.cells.get(key)?.elevation ?? null };
+    });
+  const cellOf = ownKeys.map((k, i) => {
+    if ((pickedSet.has(k) && weather.cells.get(k)) || !candidates.length) return k;
+    const p = points[i];
+    const pElev = p.ele ?? terrain.byPoint[i]?.elevationM ?? null;
+    return bestBorrowedCell(p, pElev, candidates);
+  });
 
   const withWeather = cellOf.filter(k => weather.cells.get(k)).length;
   // Old snow is only known where NOAA's analysis answered; elsewhere (Alaska, Hawaii, an outage) it's a gap.
@@ -164,7 +184,12 @@ const alignCells = (cells) => {
     const off = Math.round((start - c.time[0]) / HOUR);
     if (len <= 0 || c.time[off] !== start || c.time[off + len - 1] !== end) continue;
     const cut = (a) => (Array.isArray(a) ? a.slice(off, off + len) : a);
-    const aligned = { ...c, time: cut(c.time), Ta: cut(c.Ta), Td: cut(c.Td), P: cut(c.P), cloud: cut(c.cloud), et0: cut(c.et0) };
+    const aligned = {
+      ...c,
+      time: cut(c.time), Ta: cut(c.Ta), Td: cut(c.Td), P: cut(c.P),
+      cloud: cut(c.cloud), et0: cut(c.et0),
+      wind: cut(c.wind), gust: cut(c.gust),
+    };
     out.set(k, aligned);
     axis ??= aligned.time;
   }
@@ -206,21 +231,32 @@ const adviceFor = (id, timing) => {
 const fmtMi = (m) => (m < 10 ? m.toFixed(1) : String(Math.round(m)));
 // "Tomorrow morning" → "tomorrow morning" inside a sentence; weekdays keep their capital.
 const inSentence = (label) => (/^(This|Tomorrow) /.test(label) ? label.charAt(0).toLowerCase() + label.slice(1) : label);
+const r1 = (n) => Math.round(n * 10) / 10;
 
 /**
  * Run the model at every point and read it at a few useful moments: now,
  * and mornings/afternoons for the next days. Returns the hazards (snow and
- * ice, as estimates), per-chunk hits, checked chunks, and the conditions
- * block the UI shows.
+ * ice, as estimates), per-chunk hits, checked chunks, hydrology/terrain
+ * metrics for downstream detectors, and the conditions block the UI shows.
  */
 export const detectConditions = (route, data, { now = Date.now(), timeZone } = {}) => {
-  const empty = { hazards: [], hits: [], overlays: [], checkedChunks: new Set(), block: null };
+  const empty = { hazards: [], hits: [], overlays: [], checkedChunks: new Set(), block: null, hydrology: [], terrainPoints: [] };
   const points = data?.points || [];
   const { cells, time } = alignCells(data?.cells || new Map());
   if (!points.length || !time || time[0] > now || time[time.length - 1] < now) return empty;
 
   const zone = timeZone || data.timeZone || null;
-  const clock = localClock(zone, points[0].lon);
+  const lons = points.map(p => p.lon);
+  const midLon = lons.reduce((s, v) => s + v, 0) / lons.length;
+  const multiZone = !zone && (Math.max(...lons) - Math.min(...lons) > 10);
+  const clock = localClock(zone, midLon);
+  const zoneClockCache = new Map();
+  const clockFor = (lon) => {
+    if (!multiZone) return clock;
+    const band = Math.round(lon / 15);
+    if (!zoneClockCache.has(band)) zoneClockCache.set(band, localClock(null, band * 15));
+    return zoneClockCache.get(band);
+  };
   const local = time.map(clock);
   let nowIdx = 0;
   for (let i = 0; i < time.length; i++) if (time[i] <= now) nowIdx = i;
@@ -258,6 +294,17 @@ export const detectConditions = (route, data, { now = Date.now(), timeZone } = {
   const perWindow = windows.map(() => []);
   const timingByDay = [[], [], []];
   const checkedChunks = new Set();
+  const hydrology = [];
+  const terrainPoints = [];
+  let horizonShadedPoints = 0;
+  let minElevM = Infinity;
+  let maxElevM = -Infinity;
+  let maxSlopeDeg = 0;
+  let steepMiles = 0;
+  let maxSnowDepthCm = 0;
+  let maxSnowmelt24hMm = 0;
+  let maxRunoff48hMm = 0;
+
   points.forEach((p, i) => {
     const cell = cells.get(data.cellOf[i]);
     if (!cell) return;
@@ -265,11 +312,16 @@ export const detectConditions = (route, data, { now = Date.now(), timeZone } = {
     const fileElev = Number.isFinite(p.ele) && route.hasElevation ? p.ele : null;
     const elevM = fileElev != null && !(Number.isFinite(t.elevationM) && Math.abs(fileElev - t.elevationM) > ELEVATION_MISMATCH_M)
       ? fileElev : t.elevationM ?? fileElev ?? cell.elevation ?? 0;
+    const hasElev = fileElev != null || t.elevationM != null || cell.elevation != null;
+    const horizonDeg = Array.isArray(t.horizonDeg) ? t.horizonDeg : null;
+    if (horizonDeg?.some(a => a > 0)) horizonShadedPoints++;
+
     const point = {
       mile: p.mile, mileFrom: p.mileFrom, mileTo: p.mileTo, lat: p.lat, lon: p.lon, elevM,
       slopeDeg: t.slopeDeg ?? 0,
       aspectDeg: t.aspectDeg ?? -1,
       canopy: t.canopy ?? 0,
+      horizonDeg,
     };
     point.surface = t.nlcd != null ? surfaceFromLandCover({ nlcd: t.nlcd, slopeDeg: point.slopeDeg, canopy: point.canopy, elevationM: elevM }) : 'dirt';
     const swe = data.snow?.[i];
@@ -277,9 +329,51 @@ export const detectConditions = (route, data, { now = Date.now(), timeZone } = {
     point.unseeded = !seed && point.surface !== 'ice';
     const readings = runPoint(point, { ...cell, sun: sunFor(data.cellOf[i], cell) }, { seed, reads: readIdx });
     modelPoints.push(point);
+
+    const span = Math.max(0, (point.mileTo ?? point.mile) - (point.mileFrom ?? point.mile));
+    if (hasElev) {
+      minElevM = Math.min(minElevM, elevM);
+      maxElevM = Math.max(maxElevM, elevM);
+    }
+    if (t.slopeDeg != null) {
+      maxSlopeDeg = Math.max(maxSlopeDeg, t.slopeDeg);
+      if (t.slopeDeg >= 25) steepMiles += span;
+    }
+    terrainPoints.push({ mile: point.mile, mileFrom: point.mileFrom, mileTo: point.mileTo, elevM: hasElev ? elevM : null, slopeDeg: t.slopeDeg ?? null, surface: point.surface });
+
+    const nowR = readings.get(nowIdx);
+    let peakMelt24 = nowR?.snowmelt24hMm ?? 0;
+    let peakRunoff48 = nowR?.runoff48hMm ?? 0;
+    for (const w of windows) {
+      const wr = readings.get(w.idx);
+      if (!wr) continue;
+      if ((wr.snowmelt24hMm ?? 0) > peakMelt24) peakMelt24 = wr.snowmelt24hMm;
+      if ((wr.runoff48hMm ?? 0) > peakRunoff48) peakRunoff48 = wr.runoff48hMm;
+      if ((wr.depthCm ?? 0) > maxSnowDepthCm) maxSnowDepthCm = wr.depthCm;
+    }
+    maxSnowmelt24hMm = Math.max(maxSnowmelt24hMm, peakMelt24);
+    maxRunoff48hMm = Math.max(maxRunoff48hMm, peakRunoff48);
+    hydrology.push({
+      mile: point.mile,
+      mileFrom: point.mileFrom,
+      mileTo: point.mileTo,
+      lat: point.lat,
+      lon: point.lon,
+      elevM: hasElev ? elevM : null,
+      slopeDeg: point.slopeDeg,
+      snowmelt24hMm: nowR?.snowmelt24hMm ?? 0,
+      runoff48hMm: nowR?.runoff48hMm ?? 0,
+      peakSnowmelt24hMm: peakMelt24,
+      peakRunoff48hMm: peakRunoff48,
+    });
+
     windows.forEach((w, k) => perWindow[k].push(classifyReading(point, readings.get(w.idx))));
+    const ptClock = multiZone ? clockFor(point.lon) : null;
     days.slice(0, 3).forEach((d, di) => {
-      timingByDay[di].push(dayTiming(point, d.hours.map(h => ({ localHour: local[h].hour, reading: readings.get(h) }))));
+      timingByDay[di].push(dayTiming(point, d.hours.map(h => ({
+        localHour: ptClock ? ptClock(time[h]).hour : local[h].hour,
+        reading: readings.get(h),
+      }))));
     });
     for (const c of chunksBetween(route, point.mileFrom, point.mileTo)) checkedChunks.add(c.i);
   });
@@ -287,6 +381,21 @@ export const detectConditions = (route, data, { now = Date.now(), timeZone } = {
 
   const range = data.range || { start: points[0].mileFrom, end: points[points.length - 1].mileTo };
   const stretches = Object.fromEntries(windows.map((w, k) => [w.key, toStretches(modelPoints, perWindow[k], { timing: w.day >= 0 ? timingByDay[w.day] : null, range })]));
+
+  // Aggregate condition miles from current window for machine-readable metrics.
+  const nowConds = perWindow[0] || [];
+  let snowMiles = 0;
+  let iceMiles = 0;
+  let mudMiles = 0;
+  let wetMiles = 0;
+  modelPoints.forEach((p, idx) => {
+    const span = Math.max(0, (p.mileTo ?? p.mile) - (p.mileFrom ?? p.mile));
+    const codes = new Set((nowConds[idx] || []).map(c => c.code));
+    if (codes.has('snow-deep') || codes.has('snow') || codes.has('snow-patchy')) snowMiles += span;
+    if (codes.has('ice')) iceMiles += span;
+    if (codes.has('mud')) mudMiles += span;
+    if (codes.has('wet') || codes.has('slick')) wetMiles += span;
+  });
 
   // Snow and ice become estimated hazards over now and the next ~48 h of windows.
   const hits = [];
@@ -297,6 +406,10 @@ export const detectConditions = (route, data, { now = Date.now(), timeZone } = {
       for (const c of conds) {
         const id = HAZARD_OF[c.code];
         if (!id) continue;
+        // Trace sub-0.5 cm dustings and dry-ground morning frost belong in the
+        // modeled conditions breakdown, not as top-level traction hazards.
+        if (c.code === 'snow-patchy' && !c.likely && (c.depthCm ?? 0) < 0.5) continue;
+        if (c.code === 'ice' && !c.likely && c.why?.length && c.why.every(w => /frost/i.test(w))) continue;
         const level = Math.min(MAX_ESTIMATED_LEVEL, c.likely ? CONDITIONS[c.code].level : Math.min(1, CONDITIONS[c.code].level));
         if (!level) continue;
         const p = modelPoints[j];
@@ -341,11 +454,27 @@ export const detectConditions = (route, data, { now = Date.now(), timeZone } = {
     overlays: [],
     checkedChunks,
     timeZone: zone,
+    hydrology,
+    terrainPoints,
     block: {
       spacingMiles: data.spacing,
       windows: windows.map(w => ({ key: w.key, label: w.label, at: new Date(time[w.idx]).toISOString() })),
       stretches,
       confidence: data.confidence,
+      metrics: {
+        modeledPoints: modelPoints.length,
+        snowMiles: r1(snowMiles),
+        iceMiles: r1(iceMiles),
+        mudMiles: r1(mudMiles),
+        wetMiles: r1(wetMiles),
+        maxSnowDepthIn: r1(maxSnowDepthCm * CM_TO_IN),
+        maxSnowmelt24hMm: Math.round(maxSnowmelt24hMm),
+        maxRunoff48hMm: Math.round(maxRunoff48hMm),
+        horizonShadedPoints,
+        elevationRangeFt: Number.isFinite(minElevM) ? [Math.round(minElevM * M_TO_FT), Math.round(maxElevM * M_TO_FT)] : null,
+        steepMiles: r1(steepMiles),
+        maxSlopeDeg: Math.round(maxSlopeDeg),
+      },
     },
   };
 };

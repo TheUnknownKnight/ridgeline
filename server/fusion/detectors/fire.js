@@ -12,23 +12,86 @@ export const PERIMETER_AREA_MILES = 5;   // smoke, evacuations, expanding closur
 const CROSSING_MILES = 0.03;
 const STALE_RECORD_DAYS = 3;
 const DAY_MS = 86400000;
-// A fire reported in the last few days with no size yet is usually a new,
-// growing fire — not a spot fire. Grade it like a mid-size one.
-const NEW_FIRE_MS = 3 * DAY_MS;
-// Spot fires under 10 acres are usually caught quickly; flag them close in,
-// but don't paint "High" for miles around every dispatch.
+// A fire reported in the last 24 h with no size in any IRWIN field yet may be a
+// fast-growing initial attack; after 24 h with no size, treat as a spot dispatch.
+const NEW_FIRE_MS = 1 * DAY_MS;
+// Spot fires under 1 acre (e.g. 0.01-acre roadside/campfire CAD tickets) only
+// matter right by the trail; 1–10 acre fires are small; 10+ are mid/large.
+const SPOT_FIRE_ACRES = 1;
 const SMALL_FIRE_ACRES = 10;
+// A >=90% contained perimeter untouched for >21 days with non-active behavior is
+// mop-up / burn-scar caution, not an advancing wildfire.
+const MOPUP_CONTAINED_PCT = 90;
+const MOPUP_STATIC_DAYS = 21;
+const ACTIVE_BEHAVIOR_RE = /\b(active|moderate|extreme|high|running|crowning|spotting|torching|flanking|wind[- ]driven)\b/i;
+const PILE_BURN_RE = /\bpiles?\b/i;
 
 const typeLabel = (category) =>
   category === 'RX' ? 'Prescribed burn' : category === 'CX' ? 'Fire complex' : 'Wildfire';
 
 const isContained = (f) => f.percentContained != null && f.percentContained >= 100;
 
+/**
+ * True when a mapped wildfire perimeter is in late-stage mop-up / burn-scar
+ * patrol (>=90% contained, perimeter unchanged for >21 days, and behavior is
+ * minimal/unreported rather than active).
+ */
+export const isMopUpPerimeter = (f, now = Date.now()) => {
+  if (!f || f.category === 'RX') return false;
+  if (f.percentContained == null || f.percentContained < MOPUP_CONTAINED_PCT || f.percentContained >= 100) return false;
+  const polySrc = f.perimeterAsOf ?? f.discoveredAt;
+  if (polySrc == null || (now - polySrc) / DAY_MS <= MOPUP_STATIC_DAYS) return false;
+  if (ACTIVE_BEHAVIOR_RE.test(f.behavior || '')) return false;
+  return true;
+};
+
+/**
+ * Whether a NIFC WFIGS record represents a fire that has ended (declared out,
+ * controlled, 100% contained, Final ICS-209 filed, or an abandoned unmapped
+ * dispatch record with no active ICS-209).
+ *
+ * Safety rule: any fire with an active (non-Final) ICS-209 report or a mapped
+ * perimeter reporting partial containment (0 < pct < 100) is NEVER aged out,
+ * even on multi-month campaign fires.
+ */
+export const isFireEnded = (f, now = Date.now(), { isPerimeter = false } = {}) => {
+  if (!f) return true;
+  if (f.outAt != null && f.outAt <= now) return true;
+  if (f.controlledAt != null && f.controlledAt <= now) return true;
+  if (f.containedAt != null && f.containedAt <= now) return true;
+  if (isContained(f)) {
+    if (f.isComplexChild && f.complex && !isContained(f.complex) && !isFireEnded(f.complex, now)) return false;
+    return true;
+  }
+  if (f.icsStatus === 'F') return true;
+
+  const discDays = f.discoveredAt != null ? (now - f.discoveredAt) / DAY_MS : null;
+  const polySrc = f.perimeterAsOf ?? f.discoveredAt;
+  const polyDays = polySrc != null ? (now - polySrc) / DAY_MS : null;
+  const icsDays = f.icsAt != null ? (now - f.icsAt) / DAY_MS : null;
+
+  const hasActive209 = Boolean(f.icsStatus && f.icsStatus !== 'F' && (icsDays == null || icsDays <= 60));
+  if (hasActive209) return false;
+  if (f.percentContained != null && f.percentContained > 0 && f.percentContained < 100) return false;
+
+  if (isPerimeter) {
+    if ((discDays ?? 0) > 30 && (polyDays ?? 999) > 21) return true;
+    return false;
+  }
+
+  if (discDays == null) return false;
+  if ((f.acres == null || f.acres < 1) && discDays > 7) return true;
+  if (f.category === 'RX' && discDays > 14) return true;
+  if (discDays > 21) return true;
+  return false;
+};
+
 /** Level for a mapped perimeter at distance d (0 = trail inside/crossing). */
-export const perimeterLevel = (fire, d) => {
+export const perimeterLevel = (fire, d, now = Date.now()) => {
+  if (isFireEnded(fire, now, { isPerimeter: true })) return 0;
   const onTrail = d <= CROSSING_MILES;
   if (fire.category === 'RX') return onTrail ? 3 : d <= PERIMETER_NEAR_MILES ? 2 : 0;
-  if (isContained(fire)) return onTrail ? 3 : d <= PERIMETER_NEAR_MILES ? 1 : 0;
+  if (isMopUpPerimeter(fire, now)) return onTrail ? 2 : d <= PERIMETER_NEAR_MILES ? 1 : 0;
   if (onTrail) return 4;
   if (d <= PERIMETER_NEAR_MILES) return 3;
   if (d <= PERIMETER_AREA_MILES) return 2;
@@ -46,23 +109,37 @@ export const incidentRadiusMiles = (acres) => {
   return Math.max(0.25, r * 1.5);
 };
 
-/** Size class used for grading: unsized fresh fires count as 'mid'. */
+const isSmallRx = (inc) => inc.acres == null || inc.acres < SMALL_FIRE_ACRES || PILE_BURN_RE.test(inc.name || '');
+
+/**
+ * Size class used for grading: truly unsized fresh (<24 h) fires count as 'mid';
+ * sub-acre spots (e.g. 0.01-acre CAD roadside/campfire tickets) count as 'spot'.
+ * Use discovery date when present so automated IRWIN batch updates on old
+ * records do not make stale dispatches look newly discovered.
+ */
 const sizeClass = (inc, now) => {
   const acres = inc.acres;
   if (acres == null) {
-    const fresh = (inc.discoveredAt && now - inc.discoveredAt < NEW_FIRE_MS) || (inc.updatedAt && now - inc.updatedAt < NEW_FIRE_MS);
-    return fresh ? 'mid' : 'small';
+    const reportedAt = inc.discoveredAt ?? inc.updatedAt;
+    const fresh = reportedAt != null && now - reportedAt < NEW_FIRE_MS;
+    return fresh ? 'mid' : 'spot';
   }
+  if (acres < SPOT_FIRE_ACRES) return 'spot';
   if (acres < SMALL_FIRE_ACRES) return 'small';
   return acres >= 1000 ? 'large' : 'mid';
 };
 
 export const incidentLevel = (inc, d, now = Date.now()) => {
+  if (isFireEnded(inc, now, { isPerimeter: false })) return 0;
   const r = incidentRadiusMiles(inc.acres);
   const edge = Math.max(0, d - r);
-  if (inc.category === 'RX') return d <= r + 1 ? 2 : d <= r + 3 ? 1 : 0;
-  if (isContained(inc)) return d <= r + 1 ? 1 : 0;
+  if (inc.category === 'RX') {
+    if (PILE_BURN_RE.test(inc.name || '')) return d <= r ? 2 : edge <= 1 ? 1 : 0;
+    if (isSmallRx(inc)) return edge <= 0.5 ? 2 : edge <= 1 ? 1 : 0;
+    return edge <= 1 ? 2 : edge <= 3 ? 1 : 0;
+  }
   const size = sizeClass(inc, now);
+  if (size === 'spot') return edge <= 0.5 ? 2 : edge <= 1 ? 1 : 0;
   if (size === 'small') return edge <= 1 ? 2 : edge <= 3 ? 1 : 0;
   if (d <= r) return (inc.acres || 0) >= 100 ? 4 : 3;
   if (edge <= 2) return 3;
@@ -71,8 +148,9 @@ export const incidentLevel = (inc, d, now = Date.now()) => {
 };
 
 export const incidentReachMiles = (inc, now = Date.now()) => {
+  if (inc.category === 'RX') return incidentRadiusMiles(inc.acres) + (isSmallRx(inc) ? 1 : 3);
   const size = sizeClass(inc, now);
-  return incidentRadiusMiles(inc.acres) + (size === 'small' ? 3 : size === 'large' ? 10 : 5);
+  return incidentRadiusMiles(inc.acres) + (size === 'spot' ? 1 : size === 'small' ? 3 : size === 'large' ? 10 : 5);
 };
 
 const containmentText = (pct) => (pct == null ? 'containment not reported' : `${Math.round(pct)}% contained`);
@@ -102,16 +180,18 @@ const perimeterHazard = (hazardId, group, now, timeZone) => {
   const pcts = group.members.map(m => m.percentContained).filter(p => p != null);
   const pct = complex ? complex.percentContained : (pcts.length ? Math.min(...pcts) : null);
   const parts = [fmtAcres(acres), containmentText(pct)];
+  if (lead.behavior) parts.push(`fire behavior: ${lead.behavior.toLowerCase()}`);
   if (lead.perimeterAsOf) parts.push(`perimeter mapped ${fmtDate(lead.perimeterAsOf, timeZone)}${lead.mapMethod ? ` (${lead.mapMethod})` : ''}`);
   parts.push(freshness(lead.updatedAt, now, timeZone));
   if (complex && names.some(n => n !== complex.name)) parts.push(`includes ${names.join(', ')}`);
-  const anyActive = group.members.some(m => m.category !== 'RX' && !isContained(m));
+  const anyActive = group.members.some(m => m.category !== 'RX' && !isContained(m) && !isMopUpPerimeter(m, now));
+  const allMopUp = !anyActive && group.members.every(m => isMopUpPerimeter(m, now));
   return {
     id: hazardId,
     type: 'fire',
     kind: 'fire-perimeter',
     source: 'OFFICIAL',
-    title: `${typeLabel(complex ? 'CX' : lead.category)}: ${complex?.name || lead.name}${lead.state ? `, ${lead.state}` : ''}`,
+    title: `${allMopUp ? 'Burned area' : typeLabel(complex ? 'CX' : lead.category)}: ${complex?.name || lead.name}${lead.state ? `, ${lead.state}` : ''}`,
     detail: parts.filter(Boolean).join(' · '),
     advice: anyActive ? ADVICE.active : lead.category === 'RX' ? ADVICE.RX : ADVICE.contained,
     attribution: ATTRIBUTION,
@@ -136,7 +216,9 @@ const incidentHazard = (inc, hazardId, now, timeZone) => {
     source: 'OFFICIAL',
     title: `${typeLabel(inc.category)}: ${inc.name}${inc.state ? `, ${inc.state}` : ''} (no mapped perimeter)`,
     detail: parts.filter(Boolean).join(' · '),
-    advice: 'Only the point of origin is known — the actual fire edge may be closer. Check InciWeb and the land manager.',
+    advice: inc.category === 'RX'
+      ? ADVICE.RX
+      : 'Only the point of origin is known — the actual fire edge may be closer. Check InciWeb and the land manager.',
     attribution: ATTRIBUTION,
     url: 'https://inciweb.wildfire.gov/',
     issuedAt: toIso(inc.updatedAt),
@@ -172,8 +254,8 @@ export const detectFire = (route, data, { now = Date.now(), timeZone } = {}) => 
   const hits = [];
   const perimeterOverlays = new Map(); // perimeter -> overlay feature (level = max over hits)
   const incidentOverlays = [];
-  const perimeters = (data?.perimeters || []).filter(p => p.bbox);
-  const incidents = data?.incidents || [];
+  const perimeters = (data?.perimeters || []).filter(p => p.bbox && !isFireEnded(p, now, { isPerimeter: true }));
+  const incidents = (data?.incidents || []).filter(inc => !inc.hasPerimeter && !isFireEnded(inc, now, { isPerimeter: false }));
 
   // Complex children roll up into one hazard per complex.
   const hazardIdFor = (f) => `fire:${f.isComplexChild && f.complexId ? f.complexId : f.key}`;
@@ -185,7 +267,7 @@ export const detectFire = (route, data, { now = Date.now(), timeZone } = {}) => 
     for (const fire of queryBbox(index, box)) {
       if (!reachBoxes.has(fire)) reachBoxes.set(fire, padBbox(fire.bbox, PERIMETER_AREA_MILES));
       const { best, atMile } = minDistance(chunk.samplesFine, fire, reachBoxes.get(fire));
-      const level = perimeterLevel(fire, best);
+      const level = perimeterLevel(fire, best, now);
       if (!level) continue;
       const id = hazardIdFor(fire);
       const group = groups.get(id) || { members: [] };
@@ -205,7 +287,6 @@ export const detectFire = (route, data, { now = Date.now(), timeZone } = {}) => 
   }
 
   for (const inc of incidents) {
-    if (inc.hasPerimeter) continue;
     const id = `fire:${inc.key}`;
     // A perimeter hazard with the same id (e.g. a complex) always wins.
     if (groups.has(id)) continue;

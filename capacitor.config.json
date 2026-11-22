@@ -1,0 +1,24 @@
+{
+  "appId": "com.nickb.ridgeline",
+  "appName": "Ridgeline",
+  "webDir": "dist",
+  "backgroundColor": "#141916",
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    },
+    "SplashScreen": {
+      "launchAutoHide": true,
+      "launchShowDuration": 400,
+      "backgroundColor": "#141916",
+      "showSpinner": false
+    },
+    "StatusBar": {
+      "style": "DARK",
+      "backgroundColor": "#141916"
+    }
+  }
+}

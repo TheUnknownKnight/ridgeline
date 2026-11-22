@@ -158,6 +158,31 @@ export const queryBbox = (index, bbox) => {
   return out;
 };
 
+const simplifyDisplayRing = (ring, toleranceMiles) => {
+  const closed = closeRing(simplifyLine(ring, toleranceMiles));
+  return closed.length >= 4 ? closed : null;
+};
+
+/**
+ * Simplify prepared polygons for map display without altering hit-test shapes.
+ * Drops sub-tolerance holes and micro-islands in MultiPolygons while always
+ * preserving small standalone polygons.
+ */
+export const simplifyPolygons = (polygons, toleranceMiles) => {
+  if (!Array.isArray(polygons) || !(toleranceMiles > 0)) return polygons || [];
+  const multi = polygons.length > 1;
+  const out = [];
+  for (const poly of polygons) {
+    if (!Array.isArray(poly) || poly.length === 0) continue;
+    const outer = multi ? simplifyDisplayRing(poly[0], toleranceMiles) : cleanRing(poly[0], toleranceMiles);
+    if (!outer) continue;
+    const holes = poly.slice(1).map(r => simplifyDisplayRing(r, toleranceMiles)).filter(Boolean);
+    out.push([outer, ...holes]);
+  }
+  if (out.length) return out;
+  return polygons.map(poly => [cleanRing(poly[0], toleranceMiles)].filter(Boolean)).filter(p => p.length);
+};
+
 /** GeoJSON geometry from prepared polygons (for map overlays). */
 export const polygonsToGeometry = (polygons) =>
   polygons.length === 1

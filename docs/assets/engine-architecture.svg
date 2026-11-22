@@ -1,0 +1,297 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 716" role="img" aria-labelledby="engine-title engine-desc">
+  <title id="engine-title">Ridgeline fusion and physics engine architecture</title>
+  <desc id="engine-desc">Detailed technical architecture of Ridgeline's fusion and hourly trail-conditions engine: validation and trip windowing, 0.1 mi to 0.25 mi discretization with 3h LRU caching, parallel acquisition of LANDFIRE/USFS 30 m terrain and 8-azimuth horizon, NOAA SNODAS SWE, Open-Meteo weather history, NWS 168-hour NDFD grids, and shared national feeds under a 20-second deadline with stale-while-revalidate caching, followed by the shared hourly solar, energy-balance, and hydrology physics loop, 8 terrain-downscaled hazard detectors, safety caps, and the v2 JSON payload.</desc>
+  <style>
+    :root {
+      --paper: #edf0ea;
+      --surface: #ffffff;
+      --surface-alt: #f6f8f4;
+      --ink: #1d2622;
+      --ink-2: #4a5650;
+      --ink-3: #66726b;
+      --rule: #d5dbd3;
+      --rule-strong: #b3bcb3;
+      --contour: #9a6a3a;
+      --contour-soft: #e6d8c8;
+      --accent: #1f6fd1;
+      --accent-soft: #e4eefb;
+      --ok: #1e6b3a;
+      --warn: #ee7a14;
+      --snow: #4f7cac;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #141916;
+        --surface: #1d231f;
+        --surface-alt: #242b26;
+        --ink: #e8ece6;
+        --ink-2: #b7c0b9;
+        --ink-3: #8e9891;
+        --rule: #333b36;
+        --rule-strong: #4b544e;
+        --contour: #c9a06e;
+        --contour-soft: #3a3025;
+        --accent: #6aa8ff;
+        --accent-soft: #1b2c42;
+        --ok: #7fd29a;
+        --snow: #7ba6d4;
+      }
+    }
+    text {
+      font-family: 'Overpass', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      fill: var(--ink);
+    }
+    .bg { fill: var(--paper); stroke: var(--rule-strong); stroke-width: 1; }
+    .zone { fill: var(--surface); stroke: var(--rule-strong); stroke-width: 1.25; }
+    .box { fill: var(--surface-alt); stroke: var(--rule); stroke-width: 1; }
+    .shared { fill: var(--surface); stroke: var(--contour); stroke-width: 1.35; stroke-dasharray: 5 3; }
+    .chip { fill: var(--paper); stroke: var(--rule-strong); stroke-width: 1; }
+    .pill { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1; }
+    .tag { font-size: 10px; font-weight: 800; letter-spacing: 0.08em; fill: var(--contour); }
+    .tag-accent { font-size: 10px; font-weight: 800; letter-spacing: 0.08em; fill: var(--accent); }
+    .h1 { font-size: 13.5px; font-weight: 800; letter-spacing: -0.01em; }
+    .h2 { font-size: 11.5px; font-weight: 700; }
+    .body { font-size: 10.5px; fill: var(--ink-2); }
+    .meta { font-size: 9.8px; fill: var(--ink-3); }
+    .chip-text { font-size: 9.8px; font-weight: 700; fill: var(--ink); }
+    .pill-text { font-size: 9.8px; font-weight: 700; fill: var(--accent); }
+    .divider { stroke: var(--rule); stroke-width: 1; }
+    .arrow { stroke: var(--ink-3); stroke-width: 1.5; fill: none; }
+    .arrow-accent { stroke: var(--accent); stroke-width: 1.6; fill: none; }
+    .arrow-contour { stroke: var(--contour); stroke-width: 1.5; fill: none; }
+    .head { fill: var(--ink-3); }
+    .head-accent { fill: var(--accent); }
+    .head-contour { fill: var(--contour); }
+    .terrain-fill { fill: var(--contour-soft); stroke: var(--contour); stroke-width: 1.4; }
+    .sun-ray { stroke: var(--warn); stroke-width: 1.3; stroke-dasharray: 3 2; }
+    .sun-blocked { stroke: var(--ink-3); stroke-width: 1.1; stroke-dasharray: 2 2; opacity: 0.7; }
+    .canopy { fill: var(--ok); fill-opacity: 0.22; stroke: var(--ok); stroke-width: 1.2; }
+    .snow-cap { fill: var(--snow); fill-opacity: 0.28; stroke: var(--snow); stroke-width: 1.2; }
+  </style>
+
+  <!-- Outer plate -->
+  <rect class="bg" x="0.5" y="0.5" width="959" height="715" rx="6" />
+
+  <!-- Header -->
+  <text class="tag" x="24" y="26">FUSION &amp; PHYSICS ENGINE INTERNALS</text>
+  <text class="meta" x="936" y="26" text-anchor="end">DETERMINISTIC HOURLY ENERGY BALANCE · ≤20s BUDGET · BOUNDED LRU + SWR CACHE</text>
+  <line class="divider" x1="24" y1="37" x2="936" y2="37" />
+
+  <!-- ================= BAND 1: VALIDATION, ROUTE MODEL, ITINERARY ================= -->
+  <!-- Card 01 -->
+  <rect class="zone" x="24" y="48" width="284" height="114" rx="4" />
+  <text class="tag" x="36" y="66">01 · REQUEST &amp; TRIP WINDOW</text>
+  <text class="h2" x="36" y="83">Validation &amp; Modes (validate.js)</text>
+  <text class="body" x="36" y="101">• GPX / KML / GeoJSON ≤20k pts or hash</text>
+  <text class="body" x="36" y="117">• Planning: whole route + optional trip</text>
+  <text class="meta" x="44" y="131">startAt + paceMilesPerDay (1–100, def 12)</text>
+  <text class="body" x="36" y="148">• On-trail: GPS or mile + 5–50 mi ahead</text>
+
+  <!-- Arrow 01 -> 02 -->
+  <line class="arrow" x1="308" y1="105" x2="322" y2="105" />
+  <polygon class="head" points="328,105 321,101 321,109" />
+
+  <!-- Card 02 -->
+  <rect class="zone" x="328" y="48" width="304" height="114" rx="4" />
+  <text class="tag" x="340" y="66">02 · GEOMETRY DISCRETIZATION</text>
+  <text class="h2" x="340" y="83">Route Model (route.js, shared/geo.js)</text>
+  <text class="body" x="340" y="101">• 0.1 mi fine samples → 1 mi aligned chunks</text>
+  <text class="body" x="340" y="117">• 0.2 mi coarse subset for polygon containment</text>
+  <text class="body" x="340" y="133">• Conditions grid: 0.25 mi step (≤2,000 pts cap)</text>
+  <text class="meta" x="340" y="149">3h LRU cache · key = routeFingerprint + eleSig</text>
+
+  <!-- Arrow 02 -> 03 -->
+  <line class="arrow" x1="632" y1="105" x2="646" y2="105" />
+  <polygon class="head" points="652,105 645,101 645,109" />
+
+  <!-- Card 03 -->
+  <rect class="zone" x="652" y="48" width="284" height="114" rx="4" />
+  <text class="tag" x="664" y="66">03 · ETA &amp; Z-PROFILE BACKFILL</text>
+  <text class="h2" x="664" y="83">Itinerary &amp; Elevation (engine.js)</text>
+  <text class="body" x="664" y="101">• chunkTimeWindow maps pace vs ≤168h grid</text>
+  <text class="body" x="664" y="117">• Counts tail (itineraryBeyondForecastMiles)</text>
+  <text class="body" x="664" y="133">• LANDFIRE DEM fills missing GPX Z profile</text>
+  <text class="meta" x="664" y="149">Emits route.elevationFt (min/max/gain/loss)</text>
+
+  <!-- ================= BAND 1 -> BAND 2 PARALLEL DISPATCH ================= -->
+  <polyline class="arrow-accent" points="480,162 480,172 260,172 260,180" />
+  <polygon class="head-accent" points="260,184 256,177 264,177" />
+  <polyline class="arrow-accent" points="480,172 722,172 722,180" />
+  <polygon class="head-accent" points="722,184 718,177 726,177" />
+  <rect class="pill" x="364" y="164" width="232" height="16" rx="8" />
+  <text class="pill-text" x="480" y="175.5" text-anchor="middle">Promise.all · 20s deadline · 8s terrain/snow cap</text>
+
+  <!-- ================= BAND 2: PARALLEL DATA ACQUISITION & CACHE ================= -->
+  <!-- Zone 04A: Physics Inputs -->
+  <rect class="zone" x="24" y="184" width="472" height="148" rx="4" />
+  <text class="tag" x="36" y="202">04A · ROUTE RASTER &amp; WEATHER FORCING</text>
+  <text class="meta" x="484" y="202" text-anchor="end">Regionalized · 8s cap</text>
+
+  <!-- Sub-box 1: LANDFIRE + USFS -->
+  <rect class="box" x="36" y="211" width="218" height="53" rx="3" />
+  <text class="h2" x="44" y="227">LANDFIRE + USFS (terrain.js)</text>
+  <text class="body" x="44" y="242">CONUS/HI/AK 30m DEM, slope, aspect, TCC</text>
+  <text class="meta" x="44" y="256">NLCD/LCMS cover · 8-az horizon (≤960 probes)</text>
+
+  <!-- Sub-box 2: SNODAS -->
+  <rect class="box" x="264" y="211" width="220" height="53" rx="3" />
+  <text class="h2" x="272" y="227">NOAA SNODAS (snodas.js)</text>
+  <text class="body" x="272" y="242">1 km daily CONUS SWE seed tiles</text>
+  <text class="meta" x="272" y="256">Edge-preserving bilinear (skips NO_CLASS)</text>
+
+  <!-- Sub-box 3: Open-Meteo -->
+  <rect class="box" x="36" y="270" width="448" height="52" rx="3" />
+  <text class="h2" x="44" y="286">Open-Meteo History + Forecast (weatherHistory.js, fusion/conditions.js)</text>
+  <text class="body" x="44" y="301">10 d hourly history + 3 d forecast: Ta, Td, rain, wind_10m, gusts_10m, SW radiation, cloud</text>
+  <text class="meta" x="44" y="315">bestBorrowedCell weights distance + elevation (200 m ≈ 1 mi) · falls back to CAMS AQ when needed</text>
+
+  <!-- Zone 04B: NWS + Official Feeds + Cache -->
+  <rect class="zone" x="508" y="184" width="428" height="148" rx="4" />
+  <text class="tag" x="520" y="202">04B · NWS GRIDPOINTS, FEEDS &amp; CACHE</text>
+  <text class="meta" x="924" y="202" text-anchor="end">Shared national cache</text>
+
+  <!-- Sub-box 1: NWS -->
+  <rect class="box" x="520" y="211" width="198" height="53" rx="3" />
+  <text class="h2" x="528" y="227">NWS NDFD 2.5 km (nwsForecast.js)</text>
+  <text class="body" x="528" y="242">≤168h hourly: T, windChill, RH, QPF</text>
+  <text class="meta" x="528" y="256">snowLevel, iceAccum, wind, hazards</text>
+
+  <!-- Sub-box 2: National feeds -->
+  <rect class="box" x="726" y="211" width="198" height="53" rx="3" />
+  <text class="h2" x="734" y="227">National Feeds (0.1 mi PIP)</text>
+  <text class="body" x="734" y="242">NIFC fires · NWS alerts · avy zones</text>
+  <text class="meta" x="734" y="256">NWPS gauges · AirNow/NAQFC/HMS</text>
+
+  <!-- Sub-box 3: Cache Policy -->
+  <rect class="box" x="520" y="270" width="404" height="52" rx="3" />
+  <text class="h2" x="528" y="286">Stale-While-Revalidate Cache + Circuit Breakers (cache.js, fetch.js)</text>
+  <text class="body" x="528" y="301">5–60 min TTL · async revalidateMs · 3 s STALE_WAIT cap · up to 6 h stale fallback on outage</text>
+  <text class="meta" x="528" y="315">30 s negative cache · HTTP 429 cooldowns · in-flight deduplication · spatial grid index</text>
+
+  <!-- ================= BAND 2 -> BAND 3 ARROWS ================= -->
+  <line class="arrow-contour" x1="260" y1="332" x2="260" y2="348" />
+  <polygon class="head-contour" points="260,354 256,347 264,347" />
+  <line class="arrow-accent" x1="853" y1="332" x2="853" y2="348" />
+  <polygon class="head-accent" points="853,354 849,347 857,347" />
+
+  <!-- ================= BAND 3: HOURLY PHYSICS ENGINE + DIRECT BUS ================= -->
+  <!-- Shared Physics Core -->
+  <rect class="shared" x="24" y="354" width="734" height="180" rx="4" />
+  <text class="tag" x="36" y="372">05 · HOURLY PHYSICS &amp; HYDROLOGY CORE (shared/conditions/*)</text>
+  <text class="meta" x="746" y="372" text-anchor="end">t = −240h..+72h · server + browser</text>
+
+  <!-- 05A: Solar, Horizon & Canopy with mini diagram -->
+  <rect class="box" x="36" y="382" width="232" height="142" rx="3" />
+  <text class="h2" x="45" y="398">Solar, Horizon &amp; Canopy (solar.js)</text>
+
+  <!-- Mini Solar/Horizon Geometry Graphic -->
+  <rect x="45" y="405" width="214" height="58" rx="2" fill="var(--surface)" stroke="var(--rule)" stroke-width="1" />
+  <path class="terrain-fill" d="M46,462 L46,442 L72,425 L106,450 L148,459 L196,439 L232,456 L258,462 Z" />
+  <!-- Snow pack patch on shaded north-aspect shelf -->
+  <path class="snow-cap" d="M106,450 L148,459 L166,451 L130,453 Z" />
+  <!-- Tree canopy -->
+  <ellipse class="canopy" cx="196" cy="430" rx="13" ry="7" />
+  <line x1="196" y1="437" x2="196" y2="440" stroke="var(--ok)" stroke-width="1.5" />
+  <!-- Blocked low morning ray from left -->
+  <circle cx="56" cy="414" r="4" fill="var(--warn)" />
+  <line class="sun-blocked" x1="60" y1="416" x2="126" y2="453" />
+  <line class="sun-ray" x1="60" y1="416" x2="72" y2="425" />
+  <!-- Open high beam -->
+  <circle cx="246" cy="414" r="4.2" fill="var(--warn)" />
+  <line class="sun-ray" x1="242" y1="417" x2="152" y2="456" />
+  <!-- Labels inside clear sky -->
+  <text class="meta" x="78" y="417">horizon block</text>
+  <text class="meta" x="148" y="427">LW trap</text>
+  <text class="meta" x="188" y="417">beam + svf</text>
+
+  <text class="body" x="45" y="478">• Direct beam + sky-view + terrain bounce</text>
+  <text class="body" x="45" y="493">• 8-sector horizon shadow blocking</text>
+  <text class="body" x="45" y="508">• Overcast diffuse collapse + canopy LW</text>
+  <text class="meta" x="45" y="520">SOLAR_CONSTANT 1368 · transmissivity 0.75</text>
+
+  <!-- 05B: Hourly Energy & Phase Fluxes -->
+  <rect class="box" x="278" y="382" width="246" height="142" rx="3" />
+  <text class="h2" x="287" y="398">Hourly Energy &amp; Phase (model.js)</text>
+  <text class="body" x="287" y="416">• Elevation lapse: Ta −6.5, Td −1.8 °C/km</text>
+  <text class="body" x="287" y="432">• Wet-bulb Tw hydrometeor rain/snow split</text>
+  <text class="body" x="287" y="448">• 10m wind &amp; gusts: turbulent melt, drying</text>
+  <text class="body" x="287" y="464">• Aging snow albedo + sub-zero spring melt</text>
+  <text class="body" x="287" y="480">• Rain-on-snow (Td + wind speed flux)</text>
+  <text class="body" x="287" y="496">• Night LW cooling → refreeze-only crust</text>
+  <text class="body" x="287" y="512">• Frost / dew / verglas thermal inertia</text>
+
+  <!-- 05C: Surface Classification & Hydrology -->
+  <rect class="box" x="534" y="382" width="212" height="142" rx="3" />
+  <text class="h2" x="543" y="398">Surface &amp; Hydrology (classify.js)</text>
+  <text class="body" x="543" y="416">• Slope runoff vs soil infiltration</text>
+  <text class="body" x="543" y="432">• Forest mud vs wet rock (slick)</text>
+  <text class="body" x="543" y="448">• Trailing melt24 + runoff48 rings</text>
+  <text class="body" x="543" y="464">• States: snow, crust, slush, ice,</text>
+  <text class="body" x="551" y="479">frost, dewWet, mud, slick, dry</text>
+  <text class="body" x="543" y="496">• Plain-language "Why:" attribution</text>
+  <text class="meta" x="543" y="513">Winter snow/elevation tier stretches</text>
+
+  <!-- Right Column: Direct Official & NWS Bus -->
+  <rect class="zone" x="770" y="354" width="166" height="180" rx="4" />
+  <text class="tag-accent" x="781" y="372">DIRECT DETECTOR BUS</text>
+  <text class="h2" x="781" y="389">Official &amp; NWS Feeds</text>
+  <text class="body" x="781" y="408">• NWS 168h hourly grids</text>
+  <text class="body" x="781" y="424">• WFIGS fire perimeters</text>
+  <text class="body" x="781" y="440">• NWS CAP alerts</text>
+  <text class="body" x="781" y="456">• Avy.org danger zones</text>
+  <text class="body" x="781" y="472">• NWPS hydrographs</text>
+  <text class="body" x="781" y="488">• AirNow/NAQFC/HMS</text>
+  <line class="divider" x1="781" y1="498" x2="925" y2="498" />
+  <text class="meta" x="781" y="513">+ Physics bridge:</text>
+  <text class="meta" x="781" y="526">melt24, runoff48, slope</text>
+
+  <!-- ================= BAND 3 -> BAND 4 CONVERGENCE ================= -->
+  <line class="arrow-contour" x1="200" y1="534" x2="200" y2="548" />
+  <polygon class="head-contour" points="200,554 196,547 204,547" />
+  <polyline class="arrow-accent" points="853,534 853,544 316,544 316,548" />
+  <polygon class="head-accent" points="316,554 312,547 320,547" />
+
+  <!-- ================= BAND 4: DETECTORS, SAFETY GUARDS, OUTPUT ================= -->
+  <!-- Card 06: 8 Detectors -->
+  <rect class="zone" x="24" y="554" width="352" height="124" rx="4" />
+  <text class="tag" x="36" y="572">06 · 8 PARALLEL DETECTORS &amp; DOWNSCALING</text>
+  <text class="body" x="36" y="590">• Official: fire (0.1 mi PIP) · alerts · avy (+slope/elev)</text>
+  <text class="body" x="36" y="606">• Water: NWPS gauges + water:runoff (snowmelt/ROS)</text>
+  <text class="body" x="36" y="622">• Weather: chunk min/max DEM lapse · nwsWindChillC</text>
+  <text class="body" x="44" y="636">snowLevel mountain snow · wx:ice glaze · gusts</text>
+  <text class="body" x="36" y="652">• Air &amp; Smoke: AirNow + NAQFC/HMS/CAMS · conditions</text>
+  <text class="meta" x="36" y="669">Every detector evaluates chunkTimeWindow (0–168h)</text>
+
+  <!-- Arrow 06 -> 07 -->
+  <line class="arrow" x1="376" y1="616" x2="388" y2="616" />
+  <polygon class="head" points="394,616 387,612 387,620" />
+
+  <!-- Card 07: Consolidation & Safety -->
+  <rect class="zone" x="394" y="554" width="266" height="124" rx="4" />
+  <text class="tag" x="406" y="572">07 · CONSOLIDATION &amp; SAFETY GUARDS</text>
+  <text class="body" x="406" y="590">• Merge contiguous identical 1-mi chunks</text>
+  <text class="body" x="406" y="606">• Estimates ≤ Lv 2 (MAX_ESTIMATED_LEVEL)</text>
+  <text class="meta" x="414" y="620">Estimated models never outrank official calls</text>
+  <text class="body" x="406" y="636">• Outages/gaps → unchecked (never "Clear")</text>
+  <text class="body" x="406" y="652">• capOverlays: Douglas-Peucker simplifyLine</text>
+  <text class="meta" x="414" y="667">simplifies large polygons before cap drop</text>
+
+  <!-- Arrow 07 -> 08 -->
+  <line class="arrow" x1="660" y1="616" x2="672" y2="616" />
+  <polygon class="head" points="678,616 671,612 671,620" />
+
+  <!-- Card 08: JSON Output -->
+  <rect class="zone" x="678" y="554" width="258" height="124" rx="4" />
+  <text class="tag" x="690" y="572">08 · STRUCTURED PAYLOAD (v2)</text>
+  <text class="body" x="690" y="590">• summary + ranked hazards + segments</text>
+  <text class="body" x="690" y="606">• conditions: windows, stretches, metrics</text>
+  <text class="body" x="690" y="622">• route.elevationFt (GPX or LANDFIRE)</text>
+  <text class="body" x="690" y="638">• trip + itineraryBeyondForecastMiles</text>
+  <text class="body" x="690" y="654">• diagnostics: weather, conditions, overlays</text>
+  <text class="meta" x="690" y="669">gzipped JSON · zero user state persisted</text>
+
+  <!-- Footer -->
+  <line class="divider" x1="24" y1="689" x2="936" y2="689" />
+  <text class="meta" x="24" y="705">SHARED INVARIANT: shared/levels.js (0 Clear → 4 Extreme) DRIVES SCORING, MAP &amp; PROFILE · STATELESS NODE.JS 20+</text>
+  <text class="meta" x="936" y="705" text-anchor="end">RIDGELINE ENGINE v2</text>
+</svg>

@@ -5,8 +5,10 @@
  */
 import { h, safeUrl } from '../ui/dom.js';
 import { fmtRange, fmtMile, fmtDistance, splitFacts, plural } from '../ui/format.js';
+import { levelInfo } from '../../../shared/levels.js';
+import { createHazardBadgeEl } from '../map/weatherBadges.js';
 import {
-  icon, levelChip, sourceBadge, rankHazards, hiddenKey, joinList, changeDetector, remount,
+  icon, sourceBadge, rankHazards, hiddenKey, joinList, lowerFirst, changeDetector, remount,
   fmtWhen, fmtDay, scrollIntoViewGently,
 } from './common.js';
 
@@ -27,10 +29,46 @@ const LINK_LABELS = {
 
 const ISSUED_WORD = { alert: 'issued', avalanche: 'issued', water: 'observed', smoke: 'as of' };
 
+const RAW_TERRAIN_FACT = /^\d+(?:\.\d+)? mi >=25 deg slope\b|^route \d+–\d+ ft$/;
+const COMPACT_WHERE_PREFIX = /^(?:Alert area covers|Forecast zone covers|Forecast for|On the route at|Measured along|Modeled along|Smoke overhead at|Affects)\s+/;
+
+const fmtFt = (n) => Math.round(n).toLocaleString('en-US');
+
+export const terrainContextFact = (ctx) => {
+  if (!ctx) return null;
+  const elev = Array.isArray(ctx.elevationFt) && ctx.elevationFt.length === 2
+    ? `${fmtFt(ctx.elevationFt[0])}–${fmtFt(ctx.elevationFt[1])} ft`
+    : null;
+  if (ctx.steepMiles > 0) {
+    const details = [ctx.maxSlopeDeg >= 25 ? `max ${ctx.maxSlopeDeg}°` : null, elev].filter(Boolean);
+    return `${fmtMile(ctx.steepMiles)} mi ≥25° slope${details.length ? ` (${details.join(', ')})` : ''}`;
+  }
+  if (!elev) return null;
+  const details = [ctx.maxSlopeDeg > 0 ? `max ${ctx.maxSlopeDeg}°` : null, elev].filter(Boolean);
+  return `Route elevation: ${details.join(', ')}`;
+};
+
+export const factsForHazard = (hz) => {
+  const base = splitFacts(hz.detail).filter(f =>
+    !(hz.issuedAt && /^updated [A-Z][a-z]{2} \d{1,2}$/.test(f)) &&
+    !(hz.terrainContext && RAW_TERRAIN_FACT.test(f)));
+  const terrain = terrainContextFact(hz.terrainContext);
+  if (terrain) base.push(terrain);
+  return base;
+};
+
 export const rangesText = (ranges) => {
   const shown = ranges.slice(0, MAX_RANGES).map(([a, b]) => fmtRange(a, b));
   const extra = ranges.length - shown.length;
   return extra > 0 ? `${shown.join(', ')} and ${extra} more` : joinList(shown);
+};
+
+/** Split ranked hazards into High/Extreme vs Moderate/Low tiers when helpful to scan. */
+export const groupHazardsByTier = (list = []) => {
+  const urgent = list.filter(hz => (hz.level || 0) >= 3);
+  const watch = list.filter(hz => (hz.level || 0) < 3);
+  const grouped = list.length >= 4 || (urgent.length > 0 && watch.length > 0);
+  return { urgent, watch, grouped };
 };
 
 /** Mile stretches where a proximity hazard actually touches the trail, per hazard id. */
@@ -50,6 +88,8 @@ const crossingsById = (segments) => {
 };
 
 const closestText = (closest) => `${fmtDistance(closest.miles)} from the trail (closest at Mi ${fmtMile(closest.atMile)})`;
+
+const compactWhere = (line) => (line ? line.replace(COMPACT_WHERE_PREFIX, '') : '');
 
 /** One or two sentences saying where the hazard meets the route. */
 const whereLines = (hz, crossings) => {
@@ -75,6 +115,7 @@ const whereLines = (hz, crossings) => {
       'nws-alert': 'Alert area covers',
       'avalanche-zone': 'Forecast zone covers',
       'air-quality': 'Measured along',
+      'estimated-creek': 'Modeled along',
       'smoke-plume': 'Smoke overhead at',
     }[hz.kind];
     const forecast = hz.source === 'ESTIMATED' && (hz.type === 'weather' || hz.type === 'smoke');
@@ -131,25 +172,56 @@ const hazardItem = (hz, ctx) => {
   const where = whereLines(hz, ctx.crossings.get(hz.id));
   const when = whenLine(hz, ctx.now, ctx.tz);
   // The footer already shows the update date, in trail time; skip the server's copy of it.
-  const facts = splitFacts(hz.detail).filter(f => !(hz.issuedAt && /^updated [A-Z][a-z]{2} \d{1,2}$/.test(f)));
+  const facts = factsForHazard(hz);
   const selected = hz.id === ctx.selectedId;
-  return h('li', { class: `hazard${selected ? ' is-selected' : ''}`, 'data-hazard-id': hz.id },
-    h('button', {
-      type: 'button',
-      class: 'hazard-title',
-      'aria-pressed': String(selected),
-      'data-focus-key': hz.id,
-      onclick: () => ctx.onSelect?.(hz.id),
-    },
-    levelChip(hz.level, { estimated: hz.source === 'ESTIMATED', label: hz.levelLabel }),
-    h('span', { class: 'hazard-name' }, hz.title),
-    h('span', { class: 'visually-hidden' }, ' — show on map')),
+  const expanded = selected || (ctx.autoExpandSingle && ctx.selectedId == null);
+  const info = levelInfo(hz.level);
+  const levelText = hz.levelLabel || (info.level === 0 ? 'Clear' : info.short);
+  const tagText = hz.source === 'ESTIMATED' ? `${levelText}, estimate` : levelText;
+  const firstWhere = compactWhere(where[0]);
+  const summaryText = [firstWhere, firstWhere && when ? lowerFirst(when) : when].filter(Boolean).join(', ');
+
+  return h('li', {
+    class: `hazard${selected ? ' is-selected' : ''}${expanded ? ' is-expanded' : ''}${hz.level >= 4 ? ' is-extreme' : ''}`,
+    'data-hazard-id': hz.id,
+  },
+  h('button', {
+    type: 'button',
+    class: 'hazard-title',
+    'aria-pressed': String(selected),
+    'aria-expanded': String(expanded),
+    'data-focus-key': hz.id,
+    onclick: () => ctx.onSelect?.(hz.id),
+  },
+  createHazardBadgeEl(hz),
+  h('span', { class: 'hazard-head-main' },
+    h('span', { class: 'hazard-head-top' },
+      h('span', { class: 'hazard-name' }, hz.title),
+      h('span', { class: `hazard-kind-tag${hz.source === 'ESTIMATED' ? ' is-estimated' : ''}${hz.level >= 4 ? ' is-extreme' : ''}` }, tagText)),
+    summaryText ? h('span', { class: 'hazard-summary' }, summaryText) : null),
+  icon('chevron'),
+  h('span', { class: 'visually-hidden' }, ' — toggle details and show on map')),
+  h('div', { class: 'hazard-body', hidden: !expanded },
     where.map((line, i) => h('p', { class: i === 0 ? 'hazard-where' : 'hazard-where-more' }, line)),
     when ? h('p', { class: 'hazard-when' }, icon('stale'), when) : null,
     facts.length ? h('ul', { class: 'facts' }, facts.map(f => h('li', {}, f))) : null,
     hz.advice ? h('p', { class: 'advice' }, h('span', { class: 'advice-label' }, 'What to do'), hz.advice) : null,
     alertDetails(hz),
-    sourceLine(hz, ctx.tz));
+    sourceLine(hz, ctx.tz)));
+};
+
+const hazardGroup = (heading, items, ctx) => h('section', { class: 'hazard-group' },
+  h('h3', { class: 'hazard-group-head' },
+    h('span', {}, heading),
+    h('span', { class: 'hazard-group-count' }, String(items.length))),
+  h('ul', { class: 'hazard-list' }, items.map(hz => hazardItem(hz, ctx))));
+
+const hazardListNodes = (list, ctx) => {
+  const { urgent, watch, grouped } = groupHazardsByTier(list);
+  if (!grouped) return h('ul', { class: 'hazard-list' }, list.map(hz => hazardItem(hz, ctx)));
+  return h('div', { class: 'hazard-groups' },
+    urgent.length ? hazardGroup('High & Extreme', urgent, ctx) : null,
+    watch.length ? hazardGroup('Moderate & Low', watch, ctx) : null);
 };
 
 const isBehind = (hz, mile) => mile != null && hz.ranges?.length > 0 && hz.ranges[hz.ranges.length - 1][1] <= mile;
@@ -206,15 +278,16 @@ export const createHazards = (container, { onSelect, onShowAll } = {}) => {
     }
     const visible = ranked.filter(hz => !hiddenTypes.has(hz.type));
     const hiddenCount = ranked.length - visible.length;
+    const ahead = visible.filter(hz => !isBehind(hz, mile));
+    const behind = visible.filter(hz => isBehind(hz, mile));
     const ctx = {
       crossings: crossingsById(result.segments),
       now,
       tz: result.route?.timeZone,
       selectedId,
+      autoExpandSingle: visible.length === 1,
       onSelect,
     };
-    const ahead = visible.filter(hz => !isBehind(hz, mile));
-    const behind = visible.filter(hz => isBehind(hz, mile));
 
     remount(container,
       hiddenCount ? h('p', { class: 'hidden-note' },
@@ -223,7 +296,7 @@ export const createHazards = (container, { onSelect, onShowAll } = {}) => {
       ranked.length === 0 ? emptyState(result) : null,
       ranked.length > 0 && visible.length === 0
         ? h('p', { class: 'empty' }, `All ${plural(ranked.length, 'hazard')} are hidden by filters.`) : null,
-      ahead.length ? h('ul', { class: 'hazard-list' }, ahead.map(hz => hazardItem(hz, ctx))) : null,
+      ahead.length ? hazardListNodes(ahead, ctx) : null,
       behind.length ? h('details', { class: 'behind', 'data-open-key': 'behind' },
         h('summary', {}, icon('chevron'), `Behind you (${plural(behind.length, 'hazard')})`),
         h('ul', { class: 'hazard-list' }, behind.map(hz => hazardItem(hz, ctx)))) : null,
@@ -232,10 +305,20 @@ export const createHazards = (container, { onSelect, onShowAll } = {}) => {
 
   const setSelected = (id) => {
     selectedId = id;
-    for (const item of container.querySelectorAll('.hazard')) {
+    const items = [...container.querySelectorAll('.hazard')];
+    const autoExpandSingle = items.length === 1 && !id;
+    for (const item of items) {
       const on = item.dataset.hazardId === id;
+      const expanded = on || autoExpandSingle;
       item.classList.toggle('is-selected', on);
-      item.querySelector('.hazard-title')?.setAttribute('aria-pressed', String(on));
+      item.classList.toggle('is-expanded', expanded);
+      const btn = item.querySelector('.hazard-title');
+      if (btn) {
+        btn.setAttribute('aria-pressed', String(on));
+        btn.setAttribute('aria-expanded', String(expanded));
+      }
+      const body = item.querySelector('.hazard-body');
+      if (body) body.hidden = !expanded;
     }
   };
 

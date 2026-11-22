@@ -10,18 +10,37 @@ const POINT_MISS_TTL_MS = 24 * 60 * 60 * 1000; // outside NWS coverage (e.g. Can
 const GRID_TTL_MS = 60 * 60 * 1000;
 const GRID_REVALIDATE_MS = 60 * 60 * 1000;
 const GRID_STALE_MS = 6 * 60 * 60 * 1000;
-const ERROR_TTL_MS = 60 * 1000;
+const ERROR_TTL_MS = 15 * 1000;
 const SNAP_DEG = 0.02; // ~2 km; NWS cells are 2.5 km, so snapping loses nothing
+const SOFT_BUDGET_MS = 16500;
 
 const LAYERS = {
   quantitativePrecipitation: 'precip',
   snowfallAmount: 'snow',
+  iceAccumulation: 'ice',
   windGust: 'gust',
+  windSpeed: 'wind',
   temperature: 'temp',
   apparentTemperature: 'apparent',
+  windChill: 'windChill',
+  dewpoint: 'dewpoint',
+  relativeHumidity: 'rh',
+  skyCover: 'skyCover',
+  snowLevel: 'snowLevel',
   probabilityOfThunder: 'thunderProb',
   weather: 'weather',
 };
+
+const WEATHER_HAZARD_TYPES = new Set([
+  'freezing_rain',
+  'freezing_drizzle',
+  'sleet',
+  'ice_pellets',
+  'blowing_snow',
+  'fog',
+  'freezing_fog',
+  'thunderstorms',
+]);
 
 const DUR_RE = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?$/;
 
@@ -35,16 +54,20 @@ export const parseValidTime = (vt) => {
   return [start, start + hours * 3600000];
 };
 
-const toCanonical = (value, uom) => {
+const toCanonical = (value, uom, key) => {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null;
   const u = String(uom || '');
+  // snowLevel is altitude above sea level (m), never a depth to multiply by 1000.
+  if (key === 'snowLevel') return u.endsWith('ft') ? value * 0.3048 : value;
   if (u.endsWith('degF')) return (value - 32) * 5 / 9; // -> °C
   if (u.endsWith('m_s-1')) return value * 3.6;          // -> km/h
-  if (u.endsWith(':m') && !u.endsWith('mm')) return value * 1000; // m -> mm (precip layers)
+  if (u.endsWith(':m') && !u.endsWith('mm')) return value * 1000; // m -> mm (precip/snow/ice)
+  if (u.endsWith(':cm')) return value * 10;             // cm -> mm
   return value;
 };
 
-const parseGrid = (data) => {
+/** Parse an NWS gridpoint JSON response into canonical metric time series. */
+export const parseGrid = (data) => {
   const p = data?.properties;
   if (!p) throw new Error('NWS gridpoint response missing properties');
   const series = {};
@@ -59,12 +82,27 @@ const parseGrid = (data) => {
         const thunder = (v.value || []).find(w => w && w.weather === 'thunderstorms');
         if (thunder) out.push([span[0], span[1], thunder.coverage || 'chance']);
       } else {
-        const val = toCanonical(v.value, uom);
+        const val = toCanonical(v.value, uom, key);
         if (val != null) out.push([span[0], span[1], val]);
       }
     }
     series[key] = out;
   }
+  const weatherHazards = [];
+  for (const v of p.weather?.values || []) {
+    const span = parseValidTime(v.validTime);
+    if (!span) continue;
+    for (const w of v.value || []) {
+      if (w && WEATHER_HAZARD_TYPES.has(w.weather)) {
+        weatherHazards.push([span[0], span[1], {
+          weather: w.weather,
+          intensity: w.intensity || null,
+          coverage: w.coverage || null,
+        }]);
+      }
+    }
+  }
+  series.weatherHazards = weatherHazards;
   return {
     gridElevationM: typeof p.elevation?.value === 'number' ? p.elevation.value : null,
     updateTime: p.updateTime || null,
@@ -76,7 +114,7 @@ const snap = (v) => (Math.round(v / SNAP_DEG) * SNAP_DEG).toFixed(4);
 
 const fetchPoint = async (coordKey) => {
   const data = await fetchJson(`https://api.weather.gov/points/${coordKey}`, {
-    label: 'NWS points', timeoutMs: 10000, retries: 2, headers: { Accept: 'application/geo+json' },
+    label: 'NWS points', timeoutMs: 6000, retries: 1, headers: { Accept: 'application/geo+json' },
   });
   const props = data?.properties || {};
   if (!props.forecastGridData) throw new Error('NWS /points returned no forecastGridData');
@@ -112,7 +150,7 @@ const lookupPoint = async (lat, lon) => {
 const loadGrid = (point) => sourceCache.wrap(
   `nws:grid:${point.gridKey}`,
   { ttlMs: GRID_TTL_MS, revalidateMs: GRID_REVALIDATE_MS, staleMs: GRID_STALE_MS, errorTtlMs: ERROR_TTL_MS },
-  async () => parseGrid(await fetchJson(point.gridUrl, { label: 'NWS gridpoints', timeoutMs: 15000, retries: 2 })));
+  async () => parseGrid(await fetchJson(point.gridUrl, { label: 'NWS gridpoints', timeoutMs: 8000, retries: 1 })));
 
 /**
  * NWS gridded forecast for each sample point. Points outside NWS coverage
@@ -123,16 +161,17 @@ export const loadForecast = async ({ samples }) => {
     return { status: 'skipped', fetchedAt: null, message: 'No forecast points requested', attribution: ATTRIBUTION, url: SOURCE_URL, data: { points: [] } };
   }
 
+  const deadlineAt = Date.now() + SOFT_BUDGET_MS;
   const cached = (lat, lon) => sourceCache.get(`nws:point:${snap(lat)},${snap(lon)}`);
-  const pointResults = await mapLimit(samples, 10, (s) => {
+  const pointResults = await mapLimit(samples, 12, (s) => {
     const hit = cached(s.lat, s.lon);
     return hit !== undefined ? hit : lookupPoint(s.lat, s.lon);
-  });
+  }, { deadlineAt });
 
   const gridKeys = new Map();
   pointResults.forEach((p) => { if (p && !p.error && !gridKeys.has(p.gridKey)) gridKeys.set(p.gridKey, p); });
   const gridList = [...gridKeys.values()];
-  const gridResults = await mapLimit(gridList, 10, loadGrid);
+  const gridResults = await mapLimit(gridList, 12, loadGrid, { deadlineAt });
   const grids = new Map();
   let stale = false;
   let oldest = null;

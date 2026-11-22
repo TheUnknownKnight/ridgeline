@@ -66,6 +66,20 @@ const parseLocation = (loc) => {
  * A request carries either `coordinates` (full upload) or `routeHash` (a
  * route this server analyzed recently — saves re-uploading on refreshes).
  */
+const parseTrip = (raw) => {
+  if (raw == null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) throw new ValidationError('trip must be an object', 'invalid_trip');
+  const startMs = typeof raw.startAt === 'number' ? raw.startAt : Date.parse(String(raw.startAt || ''));
+  if (!Number.isFinite(startMs)) throw new ValidationError('trip.startAt must be a valid timestamp', 'invalid_trip');
+  let paceMilesPerDay = 12;
+  if (raw.paceMilesPerDay != null) {
+    const p = Number(raw.paceMilesPerDay);
+    if (!Number.isFinite(p) || p <= 0) throw new ValidationError('trip.paceMilesPerDay must be a positive number', 'invalid_trip');
+    paceMilesPerDay = Math.round(Math.min(100, Math.max(1, p)) * 10) / 10;
+  }
+  return { startAt: new Date(startMs).toISOString(), paceMilesPerDay };
+};
+
 export const validateAnalyzeRequest = (body) => {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw new ValidationError('Request body must be a JSON object');
 
@@ -88,5 +102,6 @@ export const validateAnalyzeRequest = (body) => {
 
   const name = typeof body.name === 'string' ? body.name.replace(/[\u0000-\u001f]/g, '').trim().slice(0, 120) : '';
 
-  return { ...(route || {}), routeHash, location: parseLocation(body.location), lookaheadMiles, name };
+  const refresh = body.refresh === true;
+  return { ...(route || {}), routeHash, location: parseLocation(body.location), lookaheadMiles, name, trip: parseTrip(body.trip), ...(refresh ? { refresh: true } : {}) };
 };

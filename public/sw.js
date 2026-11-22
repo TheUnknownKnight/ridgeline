@@ -14,7 +14,7 @@ const KNOWN_CACHES = [SHELL_CACHE, ASSET_CACHE, TILE_CACHE];
 const SHELL_FILES = ['/manifest.webmanifest', '/icon.svg'];
 // Hashed bundles from a few releases back, so a tab left open still finds its files.
 const ASSET_LIMIT = 60;
-const TILE_LIMIT = 400;
+const TILE_LIMIT = 1500;
 // On a weak signal, fall back to the cached shell instead of waiting forever.
 const NAVIGATION_TIMEOUT_MS = 4000;
 // The map draws nothing until its style and TileJSON arrive, so give up on the network sooner.

@@ -6,9 +6,13 @@
  * unavailable, or stale with the last saved fix when there is one; a
  * position picked on the map → manual (until clearManual()).
  *
- * The last real fix is saved to localStorage so a page reloaded in a canyon
- * can still show where the hiker was.
+ * Uses `@capacitor/geolocation` on native iOS/Android for reliable GPS and OS
+ * permission prompts, falling back to `navigator.geolocation` on web browsers.
+ * The last real fix is saved to localStorage so a reload in a canyon can still
+ * show where the hiker was.
  */
+import { Geolocation } from '@capacitor/geolocation';
+import { isNativeApp } from '../native/bridge.js';
 
 const STORAGE_KEY = 'ridgeline:last-fix';
 const STALE_AFTER_MS = 5 * 60 * 1000;
@@ -21,26 +25,43 @@ const saveFix = (fix) => {
   } catch { /* storage blocked: the fix just won't survive a reload */ }
 };
 
-const loadFix = () => {
+export const loadLastFix = () => {
   try {
     const fix = JSON.parse(localStorage.getItem(STORAGE_KEY));
     const valid = fix && Number.isFinite(fix.lat) && Number.isFinite(fix.lng) && Number.isFinite(fix.timestamp);
-    return valid ? { lat: fix.lat, lng: fix.lng, accuracyMeters: fix.accuracyMeters ?? null, timestamp: fix.timestamp } : null;
+    return valid
+      ? {
+        lat: fix.lat,
+        lng: fix.lng,
+        accuracyMeters: Number.isFinite(fix.accuracyMeters) ? fix.accuracyMeters : null,
+        altitudeMeters: Number.isFinite(fix.altitudeMeters) ? fix.altitudeMeters : null,
+        heading: Number.isFinite(fix.heading) ? fix.heading : null,
+        speedMps: Number.isFinite(fix.speedMps) ? fix.speedMps : null,
+        timestamp: fix.timestamp,
+      }
+      : null;
   } catch {
     return null;
   }
 };
 
+const loadFix = loadLastFix;
+
 const fixFrom = (pos) => ({
   lat: pos.coords.latitude,
   lng: pos.coords.longitude,
   accuracyMeters: Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy : null,
+  altitudeMeters: Number.isFinite(pos.coords.altitude) ? pos.coords.altitude : null,
+  heading: Number.isFinite(pos.coords.heading) ? pos.coords.heading : null,
+  speedMps: Number.isFinite(pos.coords.speed) ? pos.coords.speed : null,
   timestamp: pos.timestamp || Date.now(),
 });
 
 export const createGps = ({ onChange } = {}) => {
   let current = { state: 'off', fix: null };
   let watchId = null;
+  let nativeWatchId = null;
+  let nativeStartSeq = 0;
   let staleTimer = null;
   let wanted = false;
 
@@ -50,8 +71,16 @@ export const createGps = ({ onChange } = {}) => {
   };
 
   const stopWatch = () => {
-    if (watchId != null) navigator.geolocation.clearWatch(watchId);
+    nativeStartSeq++;
+    if (watchId != null && typeof navigator !== 'undefined' && navigator.geolocation) {
+      navigator.geolocation.clearWatch(watchId);
+    }
     watchId = null;
+    if (nativeWatchId != null) {
+      const id = nativeWatchId;
+      nativeWatchId = null;
+      Geolocation.clearWatch({ id }).catch(() => {});
+    }
     clearTimeout(staleTimer);
   };
 
@@ -68,7 +97,7 @@ export const createGps = ({ onChange } = {}) => {
   };
 
   const onPosition = (pos) => {
-    if (current.state === 'manual') return;
+    if (!pos?.coords || current.state === 'manual') return;
     const fix = fixFrom(pos);
     saveFix(fix);
     if (Date.now() - fix.timestamp < STALE_AFTER_MS) {
@@ -81,7 +110,7 @@ export const createGps = ({ onChange } = {}) => {
 
   const onError = (err) => {
     if (current.state === 'manual') return;
-    if (err.code === PERMISSION_DENIED) {
+    if (err?.code === PERMISSION_DENIED || /denied|permission/i.test(err?.message || '')) {
       stopWatch();
       emit({ state: 'denied', fix: null });
       return;
@@ -91,14 +120,43 @@ export const createGps = ({ onChange } = {}) => {
     fallBack();
   };
 
+  const startNative = async (seq) => {
+    try {
+      const perm = await Geolocation.requestPermissions();
+      if (seq !== nativeStartSeq || current.state === 'manual') return;
+      if (perm?.location === 'denied' && perm?.coarseLocation !== 'granted') {
+        emit({ state: 'denied', fix: null });
+        return;
+      }
+      const id = await Geolocation.watchPosition(WATCH_OPTIONS, (pos, err) => {
+        if (seq !== nativeStartSeq) return;
+        if (err) { onError(err); return; }
+        if (pos) onPosition(pos);
+      });
+      if (seq !== nativeStartSeq) {
+        Geolocation.clearWatch({ id }).catch(() => {});
+        return;
+      }
+      nativeWatchId = id;
+    } catch (err) {
+      if (seq === nativeStartSeq) onError(err);
+    }
+  };
+
   const start = () => {
     wanted = true;
-    if (current.state === 'manual' || watchId != null) return;
-    if (!('geolocation' in navigator)) {
+    if (current.state === 'manual' || watchId != null || nativeWatchId != null) return;
+    const saved = loadFix();
+    if (isNativeApp()) {
+      emit(saved ? { state: 'stale', fix: saved } : { state: 'acquiring', fix: null });
+      startNative(++nativeStartSeq);
+      return;
+    }
+    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
       fallBack();
       return;
     }
-    emit({ state: 'acquiring', fix: null });
+    emit(saved ? { state: 'stale', fix: saved } : { state: 'acquiring', fix: null });
     watchId = navigator.geolocation.watchPosition(onPosition, onError, WATCH_OPTIONS);
   };
 

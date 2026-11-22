@@ -22,7 +22,7 @@ export default defineConfig({
     chunkSizeWarningLimit: 1100,
     rolldownOptions: {
       output: {
-        advancedChunks: { groups: [{ name: 'maplibre', test: /node_modules[\\/]maplibre-gl/ }] },
+        codeSplitting: { groups: [{ name: 'maplibre', test: /node_modules[\\/]maplibre-gl/ }] },
       },
     },
   },

@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "updatedAt": "2026-11-22T00:00:00Z",
+  "endpoints": {
+    "nifc": {
+      "perimeters": "https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Interagency_Perimeters_Current/FeatureServer/0/query",
+      "incidents": "https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Incident_Locations_Current/FeatureServer/0/query",
+      "sourceUrl": "https://data-nifc.opendata.arcgis.com/"
+    },
+    "airnow": {
+      "contours": "https://services.arcgis.com/cJ9YHowT8TU7DUyn/ArcGIS/rest/services/AirNowLatestContoursPM25/FeatureServer/0/query",
+      "monitors": "https://services.arcgis.com/cJ9YHowT8TU7DUyn/ArcGIS/rest/services/Air_Now_Current_Monitors_PM25/FeatureServer/0/query",
+      "sourceUrl": "https://fire.airnow.gov/"
+    },
+    "nwps": {
+      "service": "https://mapservices.weather.noaa.gov/eventdriven/rest/services/water/riv_gauges/MapServer",
+      "observedLayer": 0,
+      "forecastLayer": 7,
+      "sourceUrl": "https://water.noaa.gov/"
+    },
+    "nws": {
+      "alerts": "https://api.weather.gov/alerts/active?status=actual",
+      "zones": "https://api.weather.gov/zones",
+      "points": "https://api.weather.gov/points",
+      "sourceUrl": "https://www.weather.gov/"
+    },
+    "usfsTrails": {
+      "query": "https://apps.fs.usda.gov/arcx/rest/services/EDW/EDW_TrailNFSPublish_01/MapServer/0/query",
+      "sourceUrl": "https://data.fs.usda.gov/geodata/edw/datasets.php"
+    },
+    "npsTrails": {
+      "query": "https://mapservices.nps.gov/arcgis/rest/services/NationalDatasets/NPS_Public_Trails/FeatureServer/0/query",
+      "sourceUrl": "https://public-nps.opendata.arcgis.com/"
+    },
+    "avalanche": {
+      "mapLayer": "https://api.avalanche.org/v2/public/products/map-layer",
+      "sourceUrl": "https://avalanche.org/"
+    },
+    "hms": {
+      "base": "https://satepsanone.nesdis.noaa.gov/pub/FIRE/web/HMS/Smoke_Polygons/KML",
+      "sourceUrl": "https://www.ospo.noaa.gov/products/land/hms.html"
+    },
+    "naqfc": {
+      "base": "https://mapservices.weather.noaa.gov/raster/rest/services/air_quality",
+      "sourceUrl": "https://vlab.noaa.gov/web/osti-modeling/air-quality"
+    },
+    "snodas": {
+      "base": "https://mapservices.weather.noaa.gov/raster/rest/services/snow/NOHRSC_Snow_Analysis/MapServer",
+      "sourceUrl": "https://www.nohrsc.noaa.gov/nsa/"
+    },
+    "terrain": {
+      "landfire": "https://lfps.usgs.gov/arcgis/rest/services/Landfire_Topo",
+      "iipp": "https://imagery.geoplatform.gov/iipp/rest/services/Vegetation",
+      "sourceUrl": "https://landfire.gov/"
+    },
+    "openmeteo": {
+      "forecast": "https://api.open-meteo.com/v1/forecast",
+      "airQuality": "https://air-quality-api.open-meteo.com/v1/air-quality",
+      "sourceUrl": "https://open-meteo.com/"
+    }
+  }
+}

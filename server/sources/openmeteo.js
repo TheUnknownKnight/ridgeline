@@ -101,7 +101,7 @@ const maxAqi = (loc, nowSec) => {
   let best = null;
   let from = null;
   for (let i = 0; i < t.length; i++) {
-    if (t[i] < nowSec - 3600 || t[i] > nowSec + 48 * 3600 || typeof a[i] !== 'number') continue;
+    if (t[i] < nowSec - 3600 || t[i] > nowSec + 48 * 3600 || typeof a[i] !== 'number' || a[i] < 0 || a[i] > 500) continue;
     if (from == null && a[i] >= 101) from = t[i] * 1000;
     if (!best || a[i] > best.aqi) best = { aqi: a[i], at: t[i] * 1000 };
   }
@@ -114,15 +114,15 @@ const statusOf = ({ failed, stale, total }) => (total && failed === total ? 'err
 const MAX_PRECIP_POINTS = 40;
 
 /**
- * Model-estimated precipitation over the last 48 h at each sample. Read from
+ * Model-estimated liquid rainfall over the last 48 h at each sample. Read from
  * the same hourly cells the trail-conditions model uses (one request each).
  */
 export const loadRecentPrecip = async ({ samples, now = Date.now() }) => {
   const picks = pickEvenly(samples.length, MAX_PRECIP_POINTS);
   const keys = picks.map(i => cellKeyOf(samples[i]));
   const r = await loadCells(keys);
-  const values = keys.map(k => {
-    const mm = past48hMm(r.cells.get(k), now);
+  const values = keys.map((k, idx) => {
+    const mm = past48hMm(r.cells.get(k), now, { elevM: samples[picks[idx]]?.ele ?? null });
     return mm == null ? null : { past48hMm: mm };
   });
   const nearest = nearestPick(samples.length, picks);

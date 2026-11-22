@@ -4,27 +4,27 @@
  * panels can never drift apart.
  */
 :root {
-  color-scheme: light dark;
+  color-scheme: dark light;
 
-  /* Surfaces and ink */
-  --paper: #edf0ea;
-  --surface: #ffffff;
-  --ink: #1d2622;
-  --ink-2: #4a5650;
-  --ink-3: #66726b;          /* only on --surface: 5.0:1 there, too faint on --paper */
-  --rule: #d5dbd3;
-  --rule-strong: #b3bcb3;
-  --contour: #9a6a3a;        /* elevation line, mile ticks, brand contour */
-  --focus: #1f6fd1;
+  /* Surfaces and ink (dark default) */
+  --paper: #141916;
+  --surface: #1d231f;
+  --ink: #e8ece6;
+  --ink-2: #b7c0b9;
+  --ink-3: #8e9891;
+  --rule: #333b36;
+  --rule-strong: #4b544e;
+  --contour: #c9a06e;        /* elevation line, mile ticks, brand contour */
+  --focus: #6aa8ff;
 
   /* Interface states (not hazard levels) */
-  --link: #1a5fb4;
-  --danger: #b42318;
-  --caution: #8a5300;
-  --ok: #1e6b3a;
-  --gps: #1f6fd1;
-  --scrim: rgb(237 240 234 / 0.88);
-  --shadow: 0 2px 12px rgb(29 38 34 / 0.16);
+  --link: #8ab8ff;
+  --danger: #ff9b8f;
+  --caution: #e8b04a;
+  --ok: #7fd29a;
+  --gps: #6aa8ff;
+  --scrim: rgb(20 25 22 / 0.88);
+  --shadow: 0 2px 12px rgb(0 0 0 / 0.45);
 
   /* Fixed text colors for solid level backgrounds (theme independent) */
   --on-level-dark: #1d2622;
@@ -69,26 +69,30 @@
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper: #141916;
-    --surface: #1d231f;
-    --ink: #e8ece6;
-    --ink-2: #b7c0b9;
-    --ink-3: #8e9891;
-    --rule: #333b36;
-    --rule-strong: #4b544e;
-    --contour: #c9a06e;
-    --focus: #6aa8ff;
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
 
-    --link: #8ab8ff;
-    --danger: #ff9b8f;
-    --caution: #e8b04a;
-    --ok: #7fd29a;
-    --gps: #6aa8ff;
-    --scrim: rgb(20 25 22 / 0.88);
-    --shadow: 0 2px 12px rgb(0 0 0 / 0.45);
-  }
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --paper: #edf0ea;
+  --surface: #ffffff;
+  --ink: #1d2622;
+  --ink-2: #4a5650;
+  --ink-3: #66726b;          /* only on --surface: 5.0:1 there, too faint on --paper */
+  --rule: #d5dbd3;
+  --rule-strong: #b3bcb3;
+  --contour: #9a6a3a;
+  --focus: #1f6fd1;
+
+  --link: #1a5fb4;
+  --danger: #b42318;
+  --caution: #8a5300;
+  --ok: #1e6b3a;
+  --gps: #1f6fd1;
+  --scrim: rgb(237 240 234 / 0.88);
+  --shadow: 0 2px 12px rgb(29 38 34 / 0.16);
 }
 
 @media (min-width: 900px) {

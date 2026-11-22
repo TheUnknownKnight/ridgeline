@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { createCache } from '../server/lib/cache.js';
 import { pointInPolygons, distanceToPolygonsMiles, prepPolygons, buildGridIndex, queryBbox } from '../server/lib/spatial.js';
 import { validateAnalyzeRequest, ValidationError } from '../server/lib/validate.js';
+import { mapLimit } from '../server/lib/pool.js';
+import { fetchJson } from '../server/lib/http.js';
 import { boxPolygon, straightCoords, LON, LAT0, dLat, dLon } from './helpers.js';
 
 test('cache: concurrent misses share one fetch', async () => {
@@ -121,4 +123,71 @@ test('validate: clamps lookahead, keeps only known fields', () => {
   const h = validateAnalyzeRequest({ routeHash: '0123456789abcdef' });
   assert.equal(h.routeHash, '0123456789abcdef');
   assert.equal(h.coords, undefined);
+});
+
+test('validate: accepts valid trip itinerary and rejects invalid trip payloads', () => {
+  const ok = validateAnalyzeRequest({
+    coordinates: straightCoords(5),
+    trip: { startAt: '2026-10-17T12:00:00Z', paceMilesPerDay: 15, junk: true },
+  });
+  assert.deepEqual(ok.trip, { startAt: '2026-10-17T12:00:00.000Z', paceMilesPerDay: 15 });
+
+  assert.throws(
+    () => validateAnalyzeRequest({ coordinates: straightCoords(5), trip: { startAt: 'not-a-date' } }),
+    (e) => e instanceof ValidationError && e.code === 'invalid_trip',
+  );
+  assert.throws(
+    () => validateAnalyzeRequest({ coordinates: straightCoords(5), trip: { startAt: '2026-10-17T12:00:00Z', paceMilesPerDay: -2 } }),
+    (e) => e instanceof ValidationError && e.code === 'invalid_trip',
+  );
+});
+
+
+test('mapLimit: preserves finished items and marks stragglers failed when deadlineAt expires', async () => {
+  let slowTimer;
+  const items = [10, 5000, 15];
+  const results = await mapLimit(items, 2, (ms) => new Promise((resolve) => {
+    const t = setTimeout(() => resolve(ms * 2), ms);
+    if (ms > 1000) slowTimer = t;
+  }), { deadlineAt: Date.now() + 80 });
+  clearTimeout(slowTimer);
+  assert.equal(results[0], 20);
+  assert.ok(results[1]?.error instanceof Error);
+  assert.equal(results[2], 30);
+});
+
+test('cache.clearFailures forgets remembered negative failures without evicting good entries', async () => {
+  const cache = createCache();
+  cache.set('good', 'ok', { ttlMs: 60000 });
+  let calls = 0;
+  const fn = async () => {
+    calls++;
+    if (calls === 1) throw new Error('transient');
+    return 'recovered';
+  };
+  await assert.rejects(cache.wrap('flaky', { ttlMs: 60000, errorTtlMs: 60000 }, fn));
+  await assert.rejects(cache.wrap('flaky', { ttlMs: 60000, errorTtlMs: 60000 }, fn));
+  assert.equal(calls, 1);
+
+  cache.clearFailures();
+  const r = await cache.wrap('flaky', { ttlMs: 60000, errorTtlMs: 60000 }, fn);
+  assert.equal(r.value, 'recovered');
+  assert.equal(cache.get('good'), 'ok');
+  assert.equal(validateAnalyzeRequest({ coordinates: straightCoords(2), refresh: true }).refresh, true);
+});
+
+test('http: fetchJson surfaces underlying cause code on network errors', async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    const cause = Object.assign(new Error('getaddrinfo ENOTFOUND example.invalid'), { code: 'ENOTFOUND' });
+    throw new TypeError('fetch failed', { cause });
+  };
+  try {
+    await assert.rejects(
+      fetchJson('https://example.invalid/test', { retries: 0, label: 'test' }),
+      (err) => /fetch failed \(ENOTFOUND\)/.test(err.message) && err.code === 'ENOTFOUND',
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

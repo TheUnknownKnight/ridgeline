@@ -1,11 +1,18 @@
 # Ridgeline
 
-Ridgeline checks a hiking route against live hazard data before and during a trip. Load a GPX track and it tells you, mile by mile, where the route meets active wildfires, NWS watches and warnings, avalanche danger, flooding rivers, smoke and unhealthy air, and forecast trouble (thunderstorms, wind, heavy rain, snow, heat, cold), what is likely underfoot (snow, ice, mud, slick rock, dust), and how fresh each piece of data is.
+Planning a route usually means cross-referencing half a dozen separate agencies—wildfire maps, weather alerts, river gauges, avalanche centers, and air quality monitors—and working out by hand where they intersect a trail. Ridgeline takes a GPX, KML, or GeoJSON track and checks it mile by mile against those public feeds at once, returning a clear summary of what affects the route and where.
 
 It is built for two moments:
 
 - **Planning** — the whole route, days before you go.
 - **On trail** — your GPS position, what is ahead in the next 5–50 miles, refreshed as you move, readable on a phone in sunlight, and still useful offline with the last check clearly dated.
+
+The software is built around two simple principles:
+
+1. **Unknown conditions are never reported as clear.** Public feeds time out, monitoring stations go offline, and cell coverage drops in the mountains. When a source can't be reached, or a route passes outside US coverage or through unrated avalanche terrain, Ridgeline marks those miles as unchecked rather than safe, and retains the last known report until fresh data arrives.
+2. **Reported facts are kept distinct from estimates.** Official warnings from agencies like NIFC, the National Weather Service, NOAA, and AirNow are separated from modeled trail conditions (snow, ice, and mud estimated from elevation, slope aspect, tree cover, and recent weather). On both the map and the elevation profile, official reports appear as solid lines and estimates as dashed or hatched—and estimates are capped at Moderate so an inference never outranks an official warning.
+
+![Reading Ridgeline's route profile and severity scale](docs/assets/route-anatomy.svg)
 
 > Ridgeline summarizes public data. Conditions change fast and agencies can be slow to map them. Always check closures and forecasts with the land manager and the official sources before you go.
 
@@ -13,8 +20,8 @@ It is built for two moments:
 
 | Hazard | Source | How it is matched to the route |
 | --- | --- | --- |
-| Wildfire perimeters | NIFC WFIGS current perimeters | Every 0.1 mi of trail is tested against each perimeter. Inside / within 1 mi / within 5 mi are graded separately. Containment, prescribed burns and stale records adjust the level. |
-| New fires without a mapped perimeter | NIFC WFIGS incident locations | About 300 active incidents nationwide have only a point of origin. Ridgeline estimates a footprint from reported acres and grades distance to it. |
+| Wildfire perimeters | NIFC WFIGS current perimeters | Every 0.1 mi of trail is tested against each active perimeter. Inside / within 1 mi / within 5 mi are graded separately. Fires that are 100% contained, controlled, declared out, or have a Final ICS-209 report are excluded, while active multi-month campaign fires are kept. |
+| New fires without a mapped perimeter | NIFC WFIGS incident locations | Active incidents without a mapped perimeter have only a point of origin. Ridgeline estimates a footprint from reported acres and grades distance to it, dropping stale unclosed dispatches that have no active ICS-209 or containment. |
 | Watches, warnings, advisories | NWS `/alerts/active` (refreshed every minute) | Warned polygons when present; otherwise the alert's forecast, fire-weather or county zone shapes. Severity sets the level; expired, cancelled and test messages are dropped. |
 | Avalanche danger | avalanche.org forecast zones | Danger 1–5 and avalanche warnings, with the forecast's expiry checked at request time. Zones that are in season but unrated are reported as *not checked*, never as safe. |
 | Flooding rivers and creeks | NOAA National Water Prediction Service gauges | Gauges at or above action stage (now or forecast) within 0.75 mi of the trail. Reservoir gauges are ignored. |
@@ -22,22 +29,20 @@ It is built for two moments:
 | Smoke and air quality now | EPA AirNow (hourly PM2.5 map and monitors, including Forest Service fire monitors) | Stretches inside an unhealthy AirNow area are official hazards (sensitive groups → low … hazardous → extreme). A monitor within 3 mi of the trail overrides the smoothed map. The nearest monitor's reading is shown. |
 | Smoke overhead | NOAA Hazard Mapping System satellite smoke analysis | Plumes traced in the last 24 h are drawn on the map; heavy smoke over the trail is a low note (satellites see the whole air column, not ground-level air). |
 | Smoke forecast | NOAA National Air Quality Forecast (PM2.5, ~5 km, bias-corrected), Open-Meteo CAMS where NOAA has no data | Peak AQI over the next 48 h, every 2 mi. An **estimate**, capped below official warnings. |
-| Trail conditions | Ridgeline's own model from Open-Meteo hourly weather (10 days back, 3 ahead), LANDFIRE slope and aspect, USFS tree canopy, Annual NLCD land cover and NOAA's SNODAS snow analysis | Every 0.25 mi: snow (firm or soft, and when it softens), morning ice, mud, slick rock, dust, loose rock. Deterministic physics, no AI. Snow and ice show as **estimated** hazards; the rest is in the Trail tab. |
+| Trail conditions | Ridgeline's own model from Open-Meteo hourly weather (10 days back, 3 ahead), LANDFIRE slope and aspect, USFS tree canopy, Annual NLCD land cover and NOAA's SNODAS snow analysis | Every 0.25 mi: snow (firm or soft, and when it softens), morning ice, mud, slick rock, dust, loose rock. Deterministic physics, no AI. Snow and ice show as **estimated** hazards; the rest is in the Modeled Trail Conditions tab. |
 
 Every source reports its own health (`ok`, `stale`, `partial`, `error`). A failed or stale source is shown as such in the result and in each stretch's "checked" list — a data outage never reads as "clear".
-
-Severity uses one scale everywhere — clear, low, moderate, high, extreme — colored like the US AQI scale. Estimates are drawn dashed or hatched and never rated above moderate.
 
 ## Using it
 
 1. **Open a route.** Drop a GPX, KML or GeoJSON file, or press **Try a sample route** (the real John Muir Trail from OpenStreetMap). All tracks and track segments in the file are joined in order; a planned `<rte>` is ignored when the file also has a recorded `<trk>` of the trip. Only coordinates leave your device.
-2. **Read the verdict.** The colored plaque gives the worst thing on the route and where. "Incomplete" (never green) appears when a source failed or part of the route is outside US coverage; the notes under it say exactly what wasn't checked.
-3. **Scan the elevation strip.** Real elevation from your file with a hazard band underneath. Hover or use the arrow keys to read any mile; click to jump the map there.
+2. **Read the verdict.** The colored plaque gives the worst thing on the route and where; clicking it jumps straight to that hazard on the map. "Incomplete" (never green) appears when a source failed or part of the route is outside US coverage; the notes under it say exactly what wasn't checked.
+3. **Scan the elevation strip and map.** Real elevation from your file with a hazard band underneath, paired with Start/End route markers, a one-click **Fit route** reset, and a toggleable **Map key** on the map. Hover or use the arrow keys to read any mile and its elevation; click to jump the map there.
 4. **Dig in.** *What to know* ranks hazards with where they meet the trail, closest approach, timing, the agency's advice and a link to the official source. *Along the route* is a mile-by-mile log. *Trail* shows what is likely underfoot now and on the next mornings and afternoons, with the reasons. *Data* shows each source's health and age.
 5. **On trail.** Switch to **On trail** and allow location (or set your position on the map, or type your trail mile). The plaque then reflects only what's ahead, with the next hazard, sunset and last light. It re-checks as you move a mile or every 15 minutes, sending only the route's fingerprint, not the whole file.
 6. **Since your last check.** Reopening a route compares official hazards with your previous check on this device: new, cleared (only when that source is healthy now), worse or better.
 
-Routes and results are kept in your browser (IndexedDB), so the last check stays readable with no signal, clearly dated. The installed app (production build) also caches its own shell and recently viewed map tiles.
+Routes and results are kept in your browser (IndexedDB), so the last check stays readable with no signal, clearly dated. The installed app (production build) also caches its own shell and recently viewed map tiles. Clicking **Ridgeline** in the top-left returns to the start screen at any time.
 
 ## Running it
 
@@ -53,7 +58,7 @@ npm run dev
 
 Open http://localhost:5173. The API runs on port 3000 and Vite proxies `/api` to it.
 
-To try it on a phone on the same network, run `npm run dev:lan` and open the printed network URL. Browsers only allow GPS on HTTPS or localhost, so On-trail GPS needs an HTTPS deployment (or use "Set my position on the map").
+To try it on a phone on the same network, run `npm run dev:lan` and open the printed network URL. Browsers only allow live GPS on HTTPS or `localhost`, so On-trail GPS on a phone needs an HTTPS deployment or HTTPS tunnel (or use "Set my position on the map" / enter your trail mile). When opened over HTTPS on iOS (Safari → Share → **Add to Home Screen**) or Android (Chrome → **Install app**), Ridgeline runs full-screen as an installable web app without requiring an app store.
 
 ### Production
 
@@ -83,7 +88,7 @@ npm start
 npm test
 ```
 
-107 unit and integration tests run offline with injected sources or a stubbed network: geometry, caching (stale-while-revalidate, hung upstreams, negative caching), validation, every detector (including a 0.23-mile fire crossing that the old midpoint test missed), the engine (source outages and non-US routes must never produce "clear"), measured air quality (monitor gaps, frozen or hung feeds), the smoke forecast fallback, the trail-conditions physics (snow build-up and melt by slope direction, mud drying, morning ice, refreeze, snow-analysis seeding), sun times, the HTTP API, the panel logic that decides whether a stretch reads as clear, and production static serving (run `npm run build` first for that one).
+181 unit and integration tests run offline with injected sources or a stubbed network: geometry, caching (stale-while-revalidate, hung upstreams, negative caching), validation (including trip pacing bounds), every detector (including a 0.23-mile fire crossing that the old midpoint test missed, ended-fire safety filtering, elevation-downscaled weather, wind chill, NWS snow level, freezing-rain glaze, estimated snowmelt creek runoff, and trip ETA windowing up to 168 h), the engine (source outages, beyond-horizon legs, and non-US routes must never produce "clear"), measured air quality (monitor gaps, frozen or hung feeds), the smoke forecast fallback, the trail-conditions physics (wet-bulb partitioning, wind/gust turbulent fluxes, aging albedo, 8-azimuth horizon shading, canopy longwave trapping, melt-freeze crust, rain-on-snow, frost/dew/verglas inertia, slope drainage, and SNODAS bilinear seeding), sun times, the HTTP API, the panel logic that decides whether a stretch reads as clear (and formats route DEM stats, trip forms, conditions snapshots, diagnostic summaries, and route-log chunk selection), and production static serving (run `npm run build` first for that one).
 
 ```bash
 npm run bench
@@ -93,24 +98,17 @@ Runs the full engine against the live services on `tests/fixtures/synthetic-pct.
 
 ## How it works
 
-```
-GPX ─▶ browser: parse all tracks/segments, normalize, fingerprint
-          │  POST /api/analyze { coordinates | routeHash, location?, lookaheadMiles }
-          ▼
-server: validate ─▶ route model (1-mile chunks, 0.1-mile samples; cached by fingerprint)
-          │
-          ├─ sources (parallel, cached, stale-on-error, in-flight de-duplicated)
-          │    NIFC perimeters + incidents · NWS alerts + zone shapes · avalanche.org
-          │    NOAA gauges · NWS gridpoints · EPA AirNow + NOAA HMS smoke · NOAA PM2.5 forecast
-          │    trail conditions inputs: Open-Meteo hourly · LANDFIRE · NLCD · USFS canopy · SNODAS
-          ├─ trail-conditions model (shared/conditions): hourly snow + tread-water state per 0.25 mi
-          ├─ detectors → per-chunk hits {hazard, level, note, distance}
-          ├─ consolidate → contiguous mile ranges with identical hazards
-          └─ summary → overall level, headline, next hazard ahead, source health
-          ▼
-browser: map + elevation strip + "what to know" + "along the route" + data health,
-         saved locally (IndexedDB) for offline viewing and "since your last check"
-```
+### System architecture
+
+![Ridgeline technical architecture](docs/assets/architecture.svg)
+
+### Data pipeline
+
+![How Ridgeline checks a route](docs/assets/how-it-works.svg)
+
+### Engine internals
+
+![Ridgeline fusion and physics engine architecture](docs/assets/engine-architecture.svg)
 
 - The browser and server measure the route with the same code (`shared/geo.js`), so "Mi 42.3" means the same place on the map, in the list and on the server.
 - Refreshes send only the route fingerprint; the server keeps recent route models for 3 hours and asks for the full route again if it has forgotten it.
@@ -128,6 +126,7 @@ shared/                           geometry + severity scale used by server and b
 shared/conditions/                sun, surfaces, the hourly trail-conditions model and its plain-language reading
 src/                              the web app (vanilla JS + MapLibre GL): map/, panels/, storage/, location/
 public/                           service worker, manifest, icon, samples/ (real JMT GPX)
+docs/assets/                      architecture, engine, pipeline, and route-anatomy SVG diagrams
 tests/                            node:test suites and fixtures
 scripts/bench.js                  live benchmark
 ```
@@ -146,8 +145,14 @@ scripts/bench.js                  live benchmark
 ## Known limits
 
 - US coverage. Fire, alert, gauge and forecast data are US-only; points outside NWS coverage are reported as not checked.
-- Forecast hazards cover the next 72 hours. For a trip further out, Planning mode shows current official hazards and today's outlook only.
-- Avalanche danger uses the zone's highest rating across elevation bands (conservative), not the band at each mile.
+- Forecast hazards cover the next 72 hours by default, or up to 168 hours along a timed itinerary when a start date and daily pace are provided (`trip`). Route miles scheduled beyond the forecast horizon are marked unchecked against forecasts rather than clear.
+- Avalanche danger uses the zone's highest rating across elevation bands (conservative), paired with trail elevation band and `>=30°` steepness context rather than per-band danger bulletins.
 - Fire perimeters can lag the fire by a day or more; incidents without perimeters are approximated as circles.
 - Forecast samples are spaced up to ~28 miles apart on very long routes in Planning mode; On-trail mode samples every mile ahead of you.
-- Trail conditions are a model, not an observation. The surface underfoot is inferred from 30 m land cover, slope and tree cover (OpenStreetMap rarely tags backcountry surfaces beyond "ground"); terrain shading from nearby ridges and cold-air pooling in meadows are not modeled, so morning ice can linger longer than shown. Snow older than ten days comes only from NOAA's analysis (lower 48).
+- Trail conditions are a model, not an observation. The surface underfoot is inferred from 30 m land cover (Annual NLCD / USFS LCMS), slope, tree canopy, and 8-azimuth ridge horizon shading (OpenStreetMap rarely tags backcountry surfaces beyond "ground"); fine-scale cold-air pooling in meadows is not modeled, so morning ice in frost hollows can linger longer than shown. Snow older than ten days comes only from NOAA SNODAS (lower 48).
+
+## License
+
+Ridgeline is free software licensed under the [GNU Affero General Public License v3.0 or later](LICENSE) (`AGPL-3.0-or-later`).
+
+The sample John Muir Trail track in [`public/samples/jmt-yosemite.gpx`](public/samples/jmt-yosemite.gpx) is derived from OpenStreetMap (ODbL 1.0) with elevations from Open-Meteo / Copernicus DEM (CC BY 4.0); see [`public/samples/README.md`](public/samples/README.md) for details.

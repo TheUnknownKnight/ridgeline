@@ -1,0 +1,193 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 468" role="img" aria-labelledby="arch-title arch-desc">
+  <title id="arch-title">Ridgeline technical architecture</title>
+  <desc id="arch-desc">Three-tier architecture showing the browser PWA (Vanilla ES modules, MapLibre GL 6, IndexedDB, Service Worker), the Express 5 API boundary with gzip compression and rate limiting, the Node.js 20+ fusion engine with spatial indexing and stale-while-revalidate caching, and upstream federal and scientific APIs.</desc>
+  <style>
+    :root {
+      --paper: #edf0ea;
+      --surface: #ffffff;
+      --surface-alt: #f6f8f4;
+      --ink: #1d2622;
+      --ink-2: #4a5650;
+      --ink-3: #66726b;
+      --rule: #d5dbd3;
+      --rule-strong: #b3bcb3;
+      --contour: #9a6a3a;
+      --accent: #1f6fd1;
+      --ok: #1e6b3a;
+      --warn: #ee7a14;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #141916;
+        --surface: #1d231f;
+        --surface-alt: #242b26;
+        --ink: #e8ece6;
+        --ink-2: #b7c0b9;
+        --ink-3: #8e9891;
+        --rule: #333b36;
+        --rule-strong: #4b544e;
+        --contour: #c9a06e;
+        --accent: #6aa8ff;
+        --ok: #7fd29a;
+      }
+    }
+    text {
+      font-family: 'Overpass', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      fill: var(--ink);
+    }
+    .bg { fill: var(--paper); stroke: var(--rule-strong); stroke-width: 1; }
+    .zone { fill: var(--surface); stroke: var(--rule-strong); stroke-width: 1.25; }
+    .box { fill: var(--surface-alt); stroke: var(--rule); stroke-width: 1; }
+    .shared { fill: var(--surface); stroke: var(--contour); stroke-width: 1.25; stroke-dasharray: 4 3; }
+    .chip { fill: var(--paper); stroke: var(--rule-strong); stroke-width: 1; }
+    .tag { font-size: 10.5px; font-weight: 800; letter-spacing: 0.08em; fill: var(--contour); }
+    .h1 { font-size: 14.5px; font-weight: 800; letter-spacing: -0.01em; }
+    .h2 { font-size: 12px; font-weight: 700; }
+    .body { font-size: 11px; fill: var(--ink-2); }
+    .meta { font-size: 10px; fill: var(--ink-3); }
+    .chip-text { font-size: 10px; font-weight: 700; fill: var(--ink); }
+    .divider { stroke: var(--rule); stroke-width: 1; }
+    .arrow { stroke: var(--ink-3); stroke-width: 1.5; fill: none; }
+    .arrow-accent { stroke: var(--accent); stroke-width: 1.6; fill: none; }
+    .head { fill: var(--ink-3); }
+    .head-accent { fill: var(--accent); }
+  </style>
+
+  <!-- Outer plate -->
+  <rect class="bg" x="0.5" y="0.5" width="959" height="467" rx="6" />
+
+  <!-- Header -->
+  <text class="tag" x="24" y="27">SYSTEM ARCHITECTURE &amp; TECHNOLOGY STACK</text>
+  <text class="meta" x="936" y="27" text-anchor="end">VANILLA ES MODULES · NODE.JS 20.13+ · STATELESS API · OFFLINE-FIRST PWA</text>
+  <line class="divider" x1="24" y1="37" x2="936" y2="37" />
+
+  <!-- ================= COLUMN 1: BROWSER / PWA ================= -->
+  <rect class="zone" x="24" y="50" width="280" height="330" rx="4" />
+  <text class="tag" x="38" y="70">CLIENT · BROWSER / PWA</text>
+  <text class="h1" x="38" y="88">Frontend Application</text>
+
+  <!-- Tech chips -->
+  <rect class="chip" x="38" y="98" width="76" height="19" rx="3" />
+  <text class="chip-text" x="76" y="111" text-anchor="middle">Vanilla ESM</text>
+  <rect class="chip" x="120" y="98" width="50" height="19" rx="3" />
+  <text class="chip-text" x="145" y="111" text-anchor="middle">Vite 8</text>
+  <rect class="chip" x="176" y="98" width="84" height="19" rx="3" />
+  <text class="chip-text" x="218" y="111" text-anchor="middle">MapLibre GL 6</text>
+
+  <!-- Box 1: Route & UI -->
+  <rect class="box" x="38" y="126" width="252" height="82" rx="3" />
+  <text class="h2" x="48" y="143">Parsing, Map &amp; Panels (src/)</text>
+  <text class="body" x="48" y="159">• @tmcw/togeojson + DOMParser (GPX/KML)</text>
+  <text class="body" x="48" y="174">• MapLibre WebGL 2 + dedicated Web Worker</text>
+  <text class="body" x="48" y="189">• Custom SVG elevation strip &amp; hazard bands</text>
+  <text class="meta" x="48" y="202">Vector tiles: OpenFreeMap · DEM: Terrarium</text>
+
+  <!-- Box 2: On-Trail & Diff -->
+  <rect class="box" x="38" y="216" width="252" height="68" rx="3" />
+  <text class="h2" x="48" y="233">On-Trail &amp; Client State</text>
+  <text class="body" x="48" y="249">• Geolocation API + pass-aware mile projection</text>
+  <text class="body" x="48" y="264">• Client-side aheadView() &amp; snapshot diffing</text>
+  <text class="meta" x="48" y="278">Re-checks every 1 mi or 15 min via routeHash</text>
+
+  <!-- Box 3: Offline Storage -->
+  <rect class="box" x="38" y="292" width="252" height="76" rx="3" />
+  <text class="h2" x="48" y="309">Offline Persistence (Device-Only)</text>
+  <text class="body" x="48" y="325">• IndexedDB: saved routes, results &amp; diffs</text>
+  <text class="body" x="48" y="340">• Service Worker (sw.js): app shell, hashed</text>
+  <text class="body" x="56" y="354">bundles &amp; up to 400 map tiles (SWR)</text>
+
+  <!-- ================= BOUNDARY 1: API ================= -->
+  <line class="arrow-accent" x1="304" y1="168" x2="352" y2="168" />
+  <polygon class="head-accent" points="356,168 349,164 349,172" />
+  <line class="arrow-accent" x1="356" y1="226" x2="308" y2="226" />
+  <polygon class="head-accent" points="304,226 311,222 311,230" />
+
+  <rect class="chip" x="307" y="177" width="46" height="40" rx="3" />
+  <text class="chip-text" x="330" y="193" text-anchor="middle">HTTPS</text>
+  <text class="meta" x="330" y="207" text-anchor="middle">JSON+gz</text>
+
+  <!-- ================= COLUMN 2: NODE.JS SERVER ================= -->
+  <rect class="zone" x="358" y="50" width="376" height="330" rx="4" />
+  <text class="tag" x="372" y="70">BACKEND · NODE.JS 20+ / EXPRESS 5</text>
+  <text class="h1" x="372" y="88">Stateless Analysis Server</text>
+
+  <!-- Tech chips -->
+  <rect class="chip" x="372" y="98" width="68" height="19" rx="3" />
+  <text class="chip-text" x="406" y="111" text-anchor="middle">Express 5</text>
+  <rect class="chip" x="446" y="98" width="76" height="19" rx="3" />
+  <text class="chip-text" x="484" y="111" text-anchor="middle">compression</text>
+  <rect class="chip" x="528" y="98" width="82" height="19" rx="3" />
+  <text class="chip-text" x="569" y="111" text-anchor="middle">CSP + Limits</text>
+  <rect class="chip" x="616" y="98" width="104" height="19" rx="3" />
+  <text class="chip-text" x="668" y="111" text-anchor="middle">node:test (181)</text>
+
+  <!-- Box 1: HTTP & Security -->
+  <rect class="box" x="372" y="126" width="348" height="58" rx="3" />
+  <text class="h2" x="382" y="143">API &amp; Security Layer (server/app.js, api/router.js)</text>
+  <text class="body" x="382" y="159">• POST /api/analyze · GET /api/health · strict validation</text>
+  <text class="meta" x="382" y="174">Dual IP rate limiter (30/min total, 6/min uploads) · 4 MB cap</text>
+
+  <!-- Box 2: Route Model & Spatial -->
+  <rect class="box" x="372" y="192" width="170" height="92" rx="3" />
+  <text class="h2" x="382" y="209">Route &amp; Spatial Libs</text>
+  <text class="body" x="382" y="226">• 1 mi chunks, 0.1 mi</text>
+  <text class="body" x="390" y="239">fine samples (3h LRU)</text>
+  <text class="body" x="382" y="255">• Custom grid index, PIP</text>
+  <text class="body" x="382" y="271">• Pure-JS PNG decoder</text>
+
+  <!-- Box 3: Fusion & Physics -->
+  <rect class="box" x="550" y="192" width="170" height="92" rx="3" />
+  <text class="h2" x="560" y="209">Fusion &amp; Physics</text>
+  <text class="body" x="560" y="226">• 8 parallel detectors</text>
+  <text class="body" x="560" y="242">• Hourly snow/mud</text>
+  <text class="body" x="568" y="255">energy-balance model</text>
+  <text class="body" x="560" y="271">• Span consolidation</text>
+
+  <!-- Box 4: Resilience & Caching -->
+  <rect class="box" x="372" y="292" width="348" height="76" rx="3" />
+  <text class="h2" x="382" y="309">Resilience &amp; Multi-Tier Cache (lib/cache.js, lib/http.js)</text>
+  <text class="body" x="382" y="325">• Stale-while-revalidate TtlCache (up to 6 h stale fallback)</text>
+  <text class="body" x="382" y="340">• 3 s stale race cap · 20 s per-source budget · in-flight dedup</text>
+  <text class="meta" x="382" y="355">Per-host HTTP 429 circuit breakers · concurrency pools</text>
+
+  <!-- ================= BOUNDARY 2: UPSTREAMS ================= -->
+  <line class="arrow" x1="734" y1="150" x2="764" y2="106" />
+  <polygon class="head" points="767,102 760,106 765,110" />
+  <line class="arrow" x1="734" y1="205" x2="764" y2="188" />
+  <polygon class="head" points="768,186 760,186 764,193" />
+  <line class="arrow" x1="734" y1="255" x2="764" y2="265" />
+  <polygon class="head" points="768,266 762,260 760,268" />
+  <line class="arrow" x1="734" y1="318" x2="764" y2="342" />
+  <polygon class="head" points="767,345 764,337 759,343" />
+
+  <!-- ================= COLUMN 3: UPSTREAM PROTOCOLS ================= -->
+  <rect class="zone" x="768" y="50" width="168" height="330" rx="4" />
+  <text class="tag" x="780" y="70">UPSTREAM APIS</text>
+  <text class="h1" x="780" y="88">Public Feeds</text>
+
+  <rect class="box" x="780" y="98" width="144" height="60" rx="3" />
+  <text class="h2" x="788" y="114">ArcGIS FeatureServer</text>
+  <text class="body" x="788" y="129">GeoJSON + pagination</text>
+  <text class="meta" x="788" y="144">NIFC · AirNow · NWPS</text>
+
+  <rect class="box" x="780" y="166" width="144" height="60" rx="3" />
+  <text class="h2" x="788" y="182">REST / GeoJSON / KML</text>
+  <text class="body" x="788" y="197">Alerts, zones &amp; plumes</text>
+  <text class="meta" x="788" y="212">NWS · avy.org · HMS</text>
+
+  <rect class="box" x="780" y="234" width="144" height="62" rx="3" />
+  <text class="h2" x="788" y="250">Image / MapServer</text>
+  <text class="body" x="788" y="265">PNG tiles &amp; getSamples</text>
+  <text class="meta" x="788" y="280">SNODAS · LANDFIRE · NLCD</text>
+
+  <rect class="box" x="780" y="304" width="144" height="64" rx="3" />
+  <text class="h2" x="788" y="320">JSON Time-Series</text>
+  <text class="body" x="788" y="335">10 d history + forecast</text>
+  <text class="meta" x="788" y="350">Open-Meteo · CAMS · NWS</text>
+
+  <!-- ================= BOTTOM BAR: SHARED CORE ================= -->
+  <rect class="shared" x="24" y="392" width="912" height="58" rx="4" />
+  <text class="tag" x="38" y="411">SHARED ISOMORPHIC CORE (shared/) — IDENTICAL CODE ON BROWSER &amp; SERVER</text>
+  <text class="body" x="38" y="430">• shared/geo.js: cumulative miles, slicing, route projection, bboxes    • shared/levels.js: 0–4 severity scale, AQI colors, MAX_ESTIMATED_LEVEL = 2</text>
+  <text class="body" x="38" y="444">• shared/sun.js: solar position, sunrise/sunset/civil dusk              • shared/conditions/: deterministic hourly snow, ice &amp; tread-water physics</text>
+</svg>

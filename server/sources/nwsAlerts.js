@@ -1,3 +1,4 @@
+import { endpointUrl } from '../config.js';
 import { sourceCache } from '../lib/cache.js';
 import { fetchJson } from '../lib/http.js';
 import { mapLimit } from '../lib/pool.js';
@@ -20,9 +21,54 @@ const ALERTS_STALE_MS = 30 * 60 * 1000;
 const ZONE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const ZONE_SIMPLIFY_MILES = 0.08;
 const MAX_ZONE_FETCHES = 400;
+const SOFT_BUDGET_MS = 16500;
 
 const DEAD_VTEC_ACTIONS = new Set(['CAN', 'UPG', 'EXP']);
 const SEVERITY_RANK = { Extreme: 4, Severe: 3, Moderate: 2, Minor: 1, Unknown: 0 };
+
+// Exact NWS event names that target marine/boating/beachgoers or non-weather
+// civil/admin traffic rather than hikers on land trails. Keeps inland/coastal
+// life-safety products (Winter/Ice/Dust/Tropical/Severe Thunderstorm Warnings,
+// Coastal Flood Warning, Storm Surge Warning, Tsunami Warning/Advisory, etc.).
+const NON_TRAIL_EVENTS = new Set([
+  'small craft advisory',
+  'gale warning',
+  'gale watch',
+  'storm warning',
+  'storm watch',
+  'hurricane force wind warning',
+  'hurricane force wind watch',
+  'hazardous seas warning',
+  'hazardous seas watch',
+  'heavy freezing spray warning',
+  'heavy freezing spray watch',
+  'freezing spray advisory',
+  'marine weather statement',
+  'special marine warning',
+  'brisk wind advisory',
+  'low water advisory',
+  'rip current statement',
+  'beach hazards statement',
+  'high surf advisory',
+  'high surf warning',
+  'lakeshore flood advisory',
+  'lakeshore flood statement',
+  'coastal flood statement',
+  'test',
+  'test message',
+  'administrative message',
+  '911 telephone outage',
+  '911 telephone outage emergency',
+  'child abduction emergency',
+  'blue alert',
+  'network message notification',
+  'practice/demo warning',
+  'hydrologic outlook',
+  'hazardous weather outlook',
+  'short term forecast',
+]);
+
+export const isTrailAlert = (event) => !NON_TRAIL_EVENTS.has(String(event || '').trim().toLowerCase());
 
 const parseZoneUrl = (url) => {
   const m = /\/zones\/(forecast|fire|county|public)\/([A-Z]{2}[ZC]\d{3})$/i.exec(String(url || '').trim());
@@ -45,9 +91,10 @@ const ms = (iso) => {
 const normalizeAlert = (f) => {
   const p = f.properties || {};
   if (p.status !== 'Actual' || p.messageType === 'Cancel') return null;
+  if (!isTrailAlert(p.event)) return null;
   const vtec = parseVtec(p.parameters?.VTEC?.[0]);
   if (vtec && DEAD_VTEC_ACTIONS.has(vtec.action)) return null;
-  if (p.response === 'AllClear' && p.urgency === 'Past') return null;
+  if (p.urgency === 'Past' || p.certainty === 'Unlikely' || p.response === 'AllClear') return null;
 
   // `expires` is when the message expires, not the hazard; prefer `ends`.
   const end = ms(p.ends) ?? ms(p.parameters?.eventEndingTime?.[0]) ?? ms(p.expires);
@@ -79,19 +126,20 @@ const normalizeAlert = (f) => {
   };
 };
 
-const fetchAlerts = async () => {
-  const data = await fetchJson(ALERTS_URL, {
-    label: 'NWS alerts', timeoutMs: 15000, retries: 2, headers: { Accept: 'application/geo+json' },
+const fetchAlerts = async (url, { allowEmpty = false } = {}) => {
+  const data = await fetchJson(url, {
+    label: 'NWS alerts', timeoutMs: 10000, retries: 1, headers: { Accept: 'application/geo+json' },
   });
   if (!Array.isArray(data?.features)) throw new Error('NWS alerts response missing features[]');
   // Hundreds of alerts are active nationwide at any moment; zero is a glitch.
-  if (data.features.length === 0) throw new Error('NWS returned no active alerts nationwide');
+  if (!allowEmpty && data.features.length === 0) throw new Error('NWS returned no active alerts nationwide');
   return data.features.map(normalizeAlert).filter(Boolean);
 };
 
 const fetchZone = async (zone) => {
-  const data = await fetchJson(`${ZONE_URL}/${zone.type}/${zone.id}`, {
-    label: 'NWS zone', timeoutMs: 15000, retries: 2, headers: { Accept: 'application/geo+json' },
+  const zoneBase = endpointUrl('nwsZones', ZONE_URL);
+  const data = await fetchJson(`${zoneBase}/${zone.type}/${zone.id}`, {
+    label: 'NWS zone', timeoutMs: 7000, retries: 1, headers: { Accept: 'application/geo+json' },
   });
   const polygons = prepPolygons(data?.geometry, ZONE_SIMPLIFY_MILES);
   return { key: zone.key, name: data?.properties?.name || zone.id, polygons, bbox: polygons.length ? polygonsBbox(polygons) : null };
@@ -101,13 +149,36 @@ const fetchZone = async (zone) => {
  * Active NWS alerts that could touch the route, each with the polygon(s)
  * it covers: the warned polygon when present, otherwise its zones' shapes.
  */
-export const loadAlerts = async ({ route, now = Date.now() }) => {
+export const loadAlerts = async ({ route, now = Date.now(), scope = 'nationwide' }) => {
+  const deadlineAt = Date.now() + SOFT_BUDGET_MS;
+  const states = statesForRoute(route);
+  const stateList = [...states].sort();
+  const corridor = scope === 'corridor' && Boolean(route);
+  if (corridor && stateList.length === 0) {
+    return {
+      status: 'ok',
+      fetchedAt: new Date(now).toISOString(),
+      message: 'Route outside NWS alert areas',
+      attribution: ATTRIBUTION,
+      url: SOURCE_URL,
+      data: { alerts: [] },
+    };
+  }
+  const alertsBase = endpointUrl('nwsAlerts', ALERTS_URL);
+  const useStateScope = corridor && stateList.length > 0;
+  const sep = alertsBase.includes('?') ? '&' : '?';
+  const alertsUrl = useStateScope ? `${alertsBase}${sep}area=${stateList.join(',')}` : alertsBase;
+  const cacheKey = useStateScope ? `nws:alerts:area:${stateList.join(',')}` : 'nws:alerts';
+
   let all;
   let fetchedAt;
   let stale;
   try {
     ({ value: all, fetchedAt, stale } = await sourceCache.wrap(
-      'nws:alerts', { ttlMs: ALERTS_TTL_MS, revalidateMs: ALERTS_REVALIDATE_MS, staleMs: ALERTS_STALE_MS }, fetchAlerts));
+      cacheKey,
+      { ttlMs: ALERTS_TTL_MS, revalidateMs: ALERTS_REVALIDATE_MS, staleMs: ALERTS_STALE_MS },
+      () => fetchAlerts(alertsUrl, { allowEmpty: useStateScope }),
+    ));
   } catch (err) {
     console.error('[nws-alerts] load failed:', err.message);
     return {
@@ -117,7 +188,6 @@ export const loadAlerts = async ({ route, now = Date.now() }) => {
     };
   }
 
-  const states = statesForRoute(route);
   const live = all.filter(a => !a.end || a.end > now);
   const candidates = live.filter(a => (a.bbox
     ? bboxIntersects(a.bbox, route.paddedBbox)
@@ -145,7 +215,7 @@ export const loadAlerts = async ({ route, now = Date.now() }) => {
   uncached.sort((a, b) => b.rank - a.rank);
   const toFetch = uncached.slice(0, MAX_ZONE_FETCHES).map(u => u.zone);
   const results = await mapLimit(toFetch, 8, (z) =>
-    sourceCache.wrap(`nws:zone:${z.key}`, { ttlMs: ZONE_TTL_MS, errorTtlMs: 60 * 1000 }, () => fetchZone(z)));
+    sourceCache.wrap(`nws:zone:${z.key}`, { ttlMs: ZONE_TTL_MS, errorTtlMs: 15 * 1000 }, () => fetchZone(z)), { deadlineAt });
   let zoneFailures = uncached.length - toFetch.length;
   results.forEach((r, i) => {
     if (r.error || !r.value?.bbox) { zoneFailures++; return; }
@@ -165,7 +235,11 @@ export const loadAlerts = async ({ route, now = Date.now() }) => {
   if (zoneFailures > 0) status = 'partial';
   const age = Math.round((now - fetchedAt) / 60000);
   const message = [
-    stale ? `NWS unreachable — alerts from ${age} min ago` : `${live.length} active alerts nationwide`,
+    stale
+      ? `NWS unreachable — alerts from ${age} min ago`
+      : useStateScope
+        ? `${live.length} active land alerts in ${stateList.join(', ')}`
+        : `${live.length} active land alerts nationwide`,
     zoneFailures ? `${zoneFailures} alert area${zoneFailures === 1 ? '' : 's'} could not be loaded` : null,
   ].filter(Boolean).join('. ');
 

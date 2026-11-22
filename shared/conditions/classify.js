@@ -34,9 +34,22 @@ export const snowState = (r) => {
   return 'firm';
 };
 
-export const isIcy = (r) => r.wet && (r.ground <= 0 || (r.minGround6 <= -1 && r.Ta < 3 && r.beam < 150));
+export const isIcy = (r) =>
+  (r.groundIceMm != null && r.groundIceMm > 0.05) ||
+  (r.frostMm != null && r.frostMm >= 0.08 && r.ground <= 0.5) ||
+  (r.wet && (r.ground <= 0 || (r.minGround6 <= -1 && r.Ta < 3 && r.beam < 150)));
 
 const inches = (cm) => Math.max(1, Math.round(cm / 2.54));
+
+const iceReasons = (r, shaded) => {
+  const onlyFrost = !r.wet && (r.groundIceMm ?? 0) <= 0.05 && (r.frostMm ?? 0) >= 0.08;
+  const why = onlyFrost
+    ? ['morning frost on clear cold surfaces']
+    : [`ground near ${Math.round(Math.min(r.ground, r.minGround6) * 9 / 5 + 32)}°F on a wet tread`];
+  if (r.sweMm > 0) why.push('under a dusting of snow');
+  if (shaded) why.push(shaded);
+  return why;
+};
 
 /**
  * The conditions at one point for one reading, strongest first.
@@ -50,24 +63,36 @@ export const classifyReading = (point, r) => {
   if (r.depthCm >= 0.5) {
     const code = r.depthCm >= 30 ? 'snow-deep' : r.depthCm >= 5 ? 'snow' : 'snow-patchy';
     const floor = code === 'snow-patchy' ? 1 : 10;
-    out.push({ code, likely: r.depthCm >= floor || point.surface === 'ice', state: snowState(r), depthCm: r.depthCm, why: [`about ${inches(r.depthCm)} in of snow modeled`] });
+    const why = [`about ${inches(r.depthCm)} in of snow modeled`];
+    if (r.blockedSun) why.push('shaded by surrounding terrain');
+    out.push({ code, likely: r.depthCm >= floor || point.surface === 'ice', state: snowState(r), depthCm: r.depthCm, why });
   } else if (isIcy(r)) {
-    const why = [`ground near ${Math.round(Math.min(r.ground, r.minGround6) * 9 / 5 + 32)}°F on a wet tread`];
-    if (r.sweMm > 0) why.push('under a dusting of snow');
-    if (shaded) why.push(shaded);
+    const why = iceReasons(r, shaded);
+    const onlyFrost = !r.wet && (r.groundIceMm ?? 0) <= 0.05 && (r.frostMm ?? 0) >= 0.08;
+    const likelyIce = !onlyFrost && (r.ground <= -1 || (r.groundIceMm ?? 0) >= 0.25);
     out.push(surface.iceProne
-      ? { code: 'ice', likely: r.ground <= -1, why }
+      ? { code: 'ice', likely: likelyIce, why }
       : { code: 'frozen', likely: true, why });
   } else if (r.sweMm > 0) {
     // A dusting: too thin to call snow cover, too much to call the tread dry.
     out.push({ code: 'snow-patchy', likely: false, state: snowState(r), depthCm: r.depthCm, why: ['a dusting of snow modeled'] });
   } else if (r.wet) {
     const why = [`${surface.label.toLowerCase()}, ${Math.round(r.wetness * 100)}% wet`];
+    if (surface.mud && r.minGround6 < 0 && r.ground > 0.5) why.push('freeze-thaw softening');
     if (surface.mud) out.push({ code: 'mud', likely: r.wetness >= 0.75, why });
-    else if (surface.slick) out.push({ code: 'slick', likely: r.wetness >= 0.75, why });
-    else out.push({ code: 'wet', likely: true, why });
+    if (surface.slick && (!surface.mud || r.litterWet > 0.5)) {
+      out.push({ code: 'slick', likely: r.wetness >= 0.75 && !surface.mud, why: surface.mud ? ['wet leaves and roots'] : why });
+    } else if (!surface.mud && !surface.slick) {
+      out.push({ code: 'wet', likely: true, why });
+    }
   } else if (surface.litter && r.litterWet > 0.5) {
     out.push({ code: 'slick', likely: false, why: ['wet leaves and roots'] });
+  } else if ((r.dewWet ?? 0) >= 0.5) {
+    out.push({
+      code: surface.slick ? 'slick' : 'wet',
+      likely: false,
+      why: ['morning dew on grass and smooth rock'],
+    });
   }
   if (surface.loose && (point.surface === 'scree' || point.slopeDeg >= 25)) {
     out.push({ code: 'loose', likely: point.surface === 'scree', why: [`${surface.label.toLowerCase()} on a ${Math.round(point.slopeDeg)}° slope`] });
@@ -104,7 +129,6 @@ export const dayTiming = (point, hours) => {
     const lastSnowy = snowy[snowy.length - 1];
     const lastHour = hours[hours.length - 1]?.localHour ?? 17;
     const state = morning && morning.depthCm >= 0.5 ? snowState(morning) : null;
-    // Thin snow can melt out before it ever counts as "soft".
     if (morning && morning.depthCm >= 0.5 && lastSnowy.localHour < lastHour) {
       return { kind: 'snow', text: `${state === 'firm' ? 'firm early, ' : ''}melts out by about ${clock(lastSnowy.localHour + 1)}` };
     }
@@ -132,7 +156,6 @@ export const dayTiming = (point, hours) => {
   return null;
 };
 
-/** "mostly north-facing" when most points share a quadrant. */
 const facing = (aspects) => {
   const names = ['north', 'east', 'south', 'west'];
   const counts = [0, 0, 0, 0];
@@ -160,14 +183,20 @@ const titleOf = (regime, parts) => {
 
 const describeRun = (points, perPoint, run, timing) => {
   const byCode = new Map();
+  const elevs = [];
+  let maxSnowIn = 0;
   for (const i of run.idx) {
+    if (Number.isFinite(points[i].elevM)) elevs.push(points[i].elevM);
     for (const c of perPoint[i]) {
       if (run.regime !== 'dry' && CONDITIONS[c.code].regime === 'dry' && c.code !== 'loose') continue;
       const e = byCode.get(c.code) || { n: 0, likely: 0, elev: [], aspects: [], depth: [], why: new Map(), timing: new Map() };
       e.n++;
       if (c.likely) e.likely++;
       if (Number.isFinite(points[i].elevM)) e.elev.push(points[i].elevM);
-      if (Number.isFinite(c.depthCm)) e.depth.push(c.depthCm);
+      if (Number.isFinite(c.depthCm)) {
+        e.depth.push(c.depthCm);
+        maxSnowIn = Math.max(maxSnowIn, inches(c.depthCm));
+      }
       e.aspects.push(points[i].slopeDeg >= 5 ? points[i].aspectDeg : null);
       for (const w of c.why) e.why.set(w.replace(/\d+/g, '#'), w);
       const t = timing?.[i];
@@ -180,7 +209,6 @@ const describeRun = (points, perPoint, run, timing) => {
   const parts = [...byCode]
     .map(([code, e]) => {
       const why = [...e.why.values()];
-      // Depth reads as the stretch's range, not whichever point came last.
       if (e.depth.length && why.some(w => /in of snow modeled/.test(w))) {
         const lo = inches(Math.min(...e.depth));
         const hi = inches(Math.max(...e.depth));
@@ -208,18 +236,61 @@ const describeRun = (points, perPoint, run, timing) => {
     level: Math.max(0, ...parts.map(p => p.level)),
     mileStart: round1(first.mileFrom ?? first.mile),
     mileEnd: round1(last.mileTo ?? last.mile),
+    elevationFt: elevs.length ? [roundTo(Math.min(...elevs) * 3.28084, 100), roundTo(Math.max(...elevs) * 3.28084, 100)] : null,
+    maxSnowDepthIn: maxSnowIn || 0,
     parts,
   };
 };
 
 const missing = (a, b) => ({ regime: 'missing', title: REGIME_TITLE.missing, level: 0, mileStart: round1(a), mileEnd: round1(b), parts: [] });
 
+const snowTierOf = (conds) => {
+  const top = conds[0]?.code;
+  if (top === 'snow-deep') return 2;
+  if (top === 'snow') return 1;
+  return 0; // patchy snow, ice, frozen, or bare gap
+};
+
 /**
- * Group points into stretches by regime (winter / wet / dry). A point takes
- * the strongest regime within ±smoothPoints neighbours, so one sunny
- * switchback inside a snowy stretch doesn't split it, at any spacing. Miles
- * that were not modeled (no weather) become explicit "Not estimated"
- * stretches, never part of a dry one. `range` adds leading/trailing gaps.
+ * Split a long winter run only when two sustained (>= 3 point) sub-stretches
+ * shift snow severity tier AND sit in meaningfully distinct elevation bands (~2,000+ ft apart).
+ */
+const splitSustainedWinterTiers = (points, perPoint, run) => {
+  if (run.regime !== 'winter' || run.idx.length < 6) return [run];
+  const minSub = 3;
+  const tiers = run.idx.map(i => snowTierOf(perPoint[i]));
+  const elevs = run.idx.map(i => points[i].elevM);
+  let bestCut = -1;
+  let bestScore = 0;
+
+  for (let k = minSub; k <= run.idx.length - minSub; k++) {
+    const leftTiers = tiers.slice(0, k);
+    const rightTiers = tiers.slice(k);
+    const leftAvg = leftTiers.reduce((s, v) => s + v, 0) / leftTiers.length;
+    const rightAvg = rightTiers.reduce((s, v) => s + v, 0) / rightTiers.length;
+    if (Math.abs(leftAvg - rightAvg) < 0.9) continue;
+
+    const lElev = elevs.slice(0, k).filter(Number.isFinite);
+    const rElev = elevs.slice(k).filter(Number.isFinite);
+    if (!lElev.length || !rElev.length) continue;
+    const lMean = lElev.reduce((s, v) => s + v, 0) / lElev.length;
+    const rMean = rElev.reduce((s, v) => s + v, 0) / rElev.length;
+    const elevDiff = Math.abs(lMean - rMean);
+    if (elevDiff < 550) continue;
+
+    const score = elevDiff * Math.abs(leftAvg - rightAvg);
+    if (score > bestScore) { bestScore = score; bestCut = k; }
+  }
+  if (bestCut < 0) return [run];
+  return [
+    ...splitSustainedWinterTiers(points, perPoint, { regime: run.regime, idx: run.idx.slice(0, bestCut) }),
+    ...splitSustainedWinterTiers(points, perPoint, { regime: run.regime, idx: run.idx.slice(bestCut) }),
+  ];
+};
+
+/**
+ * Group points into stretches by regime (winter / wet / dry), smoothing single
+ * switchback outliers while keeping major sustained winter elevation transitions separate.
  */
 export const toStretches = (points, perPoint, { smoothPoints = 2, timing = null, range = null } = {}) => {
   const out = [];
@@ -236,12 +307,14 @@ export const toStretches = (points, perPoint, { smoothPoints = 2, timing = null,
     for (let j = i + 1; j <= Math.min(raw.length - 1, i + smoothPoints) && adjacent(j); j++) if (REGIME_RANK[raw[j]] > REGIME_RANK[best]) best = raw[j];
     return best;
   });
-  const runs = [];
+  const baseRuns = [];
   smooth.forEach((regime, i) => {
-    const last = runs[runs.length - 1];
+    const last = baseRuns[baseRuns.length - 1];
     if (last && last.regime === regime && adjacent(i)) last.idx.push(i);
-    else runs.push({ regime, idx: [i] });
+    else baseRuns.push({ regime, idx: [i] });
   });
+  const runs = baseRuns.flatMap(run => splitSustainedWinterTiers(points, perPoint, run));
+
   if (range && points[0].mileFrom - range.start > GAP) out.push(missing(range.start, points[0].mileFrom));
   runs.forEach((run, k) => {
     if (k > 0) {
@@ -258,8 +331,6 @@ export const toStretches = (points, perPoint, { smoothPoints = 2, timing = null,
 
 /**
  * One plain sentence per condition in a stretch — what the UI shows.
- * scope 'stretch' words the share relative to "that stretch" (for hazard
- * cards that sit next to route-wide ranges).
  */
 export const partText = (p, { scope = 'it' } = {}) => {
   const band = !p.elevationFt ? null : p.elevationFt[0] === p.elevationFt[1]

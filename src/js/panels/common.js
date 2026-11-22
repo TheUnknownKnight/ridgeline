@@ -24,6 +24,13 @@ const ICON_PATHS = {
   chevron: 'M6 9l6 6 6-6',
   arrow: 'M5 12h14M13 6l6 6-6 6',
   trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13',
+  map: 'M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2V6zM9 4v14M15 6v14',
+  route: 'M6 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM18 9a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM8 17h4a3 3 0 0 0 3-3v-2a3 3 0 0 1 3-3',
+  mountain: 'M3 19l6-11 4 6 3-4 5 9H3z',
+  database: 'M4 6c0 1.66 3.58 3 8 3s8-1.34 8-3-3.58-3-8-3-8 1.34-8 3zM4 6v12c0 1.66 3.58 3 8 3s8-1.34 8-3V6M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3',
+  download: 'M12 4v11M7.5 11.5L12 16l4.5-4.5M4 19h16',
+  copy: 'M9 9h10v10H9zM5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1',
+  sun: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4',
 };
 
 /** Decorative stroke icon (aria-hidden); the adjacent text carries the meaning. */
@@ -164,6 +171,33 @@ export const fmtStamp = (iso, now = Date.now()) => {
 
 /** Route totals: "210.4", "3,410" (format.js fmtMile rounds past 100 mi, which reads as imprecise here). */
 export const fmtTotal = (miles) => (miles >= 1000 ? Math.round(miles).toLocaleString('en-US') : String(Math.round(miles * 10) / 10));
+
+const fmtInt = (n) => Math.round(n).toLocaleString('en-US');
+
+/** Compact route line under #route-name, incorporating DEM backfill when GPX lacked Z. */
+export const fmtRouteMeta = (route, result = null, { busy = false } = {}) => {
+  const parts = [`${fmtTotal(route.lengthMiles)} mi`];
+  if (route.meta?.trackCount > 1) parts.push(`joined ${route.meta.trackCount} tracks`);
+  const elev = result?.route?.elevationFt;
+  if (elev && Number.isFinite(elev.min) && Number.isFinite(elev.max)) {
+    const range = elev.min === elev.max ? `${fmtInt(elev.max)} ft` : `${fmtInt(elev.min)}–${fmtInt(elev.max)} ft`;
+    const dem = elev.source === 'landfire' ? ', DEM' : '';
+    parts.push(elev.gain > 0 ? `+${fmtInt(elev.gain)} ft (${range}${dem})` : `${range}${dem ? ' (DEM)' : ''}`);
+  } else if (!route.hasElevation && !busy) {
+    parts.push('no elevation data');
+  }
+  return parts.join(', ');
+};
+
+/** Whether two optional trip itineraries describe the same start timestamp and pace. */
+export const sameTrip = (a, b) => {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return Date.parse(a.startAt) === Date.parse(b.startAt) && Math.abs((a.paceMilesPerDay || 12) - (b.paceMilesPerDay || 12)) < 0.05;
+};
+
+export const shouldShowScrollTop = (scrollTop, view, threshold = 160) =>
+  view === 'route' && Number.isFinite(scrollTop) && scrollTop > threshold;
 
 /** "4 mi", "0.6 mi" — segment lengths without a trailing ".0". */
 export const fmtLength = (miles) => {

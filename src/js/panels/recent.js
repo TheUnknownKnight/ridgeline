@@ -21,7 +21,9 @@ export const createRecent = (container, { onOpen, onRemove, fallbackFocus = null
 
   const item = (route, now) => h('li', { class: 'recent-item' },
     h('button', { type: 'button', class: 'recent-open', 'data-focus-key': `open:${route.id}`, onclick: () => onOpen?.(route.id) },
-      h('span', { class: 'recent-name' }, route.name || 'Untitled route'),
+      h('span', { class: 'recent-head' },
+        h('span', { class: 'recent-name' }, route.name || 'Untitled route'),
+        route.offlinePack ? h('span', { class: 'offline-pill' }, 'Offline ready') : null),
       h('span', { class: 'recent-meta' }, metaText(route, now))),
     h('button', {
       type: 'button',

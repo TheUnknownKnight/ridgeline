@@ -1,0 +1,170 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 400" role="img" aria-labelledby="hiw-title hiw-desc">
+  <title id="hiw-title">How Ridgeline checks a route</title>
+  <desc id="hiw-desc">A GPS track is normalized in the browser, checked mile by mile on the server against official agency feeds and an hourly trail-conditions model, and returned as a consolidated route verdict stored locally for offline use.</desc>
+  <style>
+    :root {
+      --paper: #edf0ea;
+      --surface: #ffffff;
+      --ink: #1d2622;
+      --ink-2: #4a5650;
+      --ink-3: #66726b;
+      --rule: #d5dbd3;
+      --rule-strong: #b3bcb3;
+      --contour: #9a6a3a;
+      --clear: #2f9e5b;
+      --low: #d9a400;
+      --mod: #ee7a14;
+      --high: #dc3a1c;
+      --ext: #9e1650;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #141916;
+        --surface: #1d231f;
+        --ink: #e8ece6;
+        --ink-2: #b7c0b9;
+        --ink-3: #8e9891;
+        --rule: #333b36;
+        --rule-strong: #4b544e;
+        --contour: #c9a06e;
+      }
+    }
+    text {
+      font-family: 'Overpass', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      fill: var(--ink);
+    }
+    .bg { fill: var(--paper); stroke: var(--rule-strong); stroke-width: 1; }
+    .card { fill: var(--surface); stroke: var(--rule-strong); stroke-width: 1.25; }
+    .card-dashed { fill: var(--surface); stroke: var(--rule-strong); stroke-width: 1.25; stroke-dasharray: 5 3; }
+    .step-num { font-size: 11px; font-weight: 800; letter-spacing: 0.08em; fill: var(--contour); }
+    .h1 { font-size: 15px; font-weight: 800; letter-spacing: -0.01em; }
+    .h2 { font-size: 12.5px; font-weight: 700; }
+    .body { font-size: 11.5px; fill: var(--ink-2); }
+    .meta { font-size: 10.5px; fill: var(--ink-3); }
+    .pill { fill: var(--paper); stroke: var(--rule); stroke-width: 1; }
+    .arrow { stroke: var(--ink-3); stroke-width: 1.5; fill: none; }
+    .arrow-head { fill: var(--ink-3); }
+    .divider { stroke: var(--rule); stroke-width: 1; }
+    .track { stroke: var(--contour); stroke-width: 2.2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+
+  <!-- Outer plate -->
+  <rect class="bg" x="0.5" y="0.5" width="959" height="399" rx="6" />
+
+  <!-- Header bar -->
+  <text class="step-num" x="24" y="28">SYSTEM ARCHITECTURE</text>
+  <text class="meta" x="936" y="28" text-anchor="end">SHARED GEOMETRY (shared/geo.js) · ZERO SERVER-SIDE ROUTE STORAGE</text>
+  <line class="divider" x1="24" y1="38" x2="936" y2="38" />
+
+  <!-- ================= STAGE 1: ROUTE INPUT ================= -->
+  <rect class="card" x="24" y="54" width="184" height="296" rx="4" />
+  <text class="step-num" x="40" y="76">01 · BROWSER</text>
+  <text class="h1" x="40" y="96">Route Input</text>
+  <text class="body" x="40" y="116">GPX, KML, or GeoJSON</text>
+  <text class="meta" x="40" y="132">Parsed locally on device</text>
+
+  <!-- Mini topo / track preview box -->
+  <rect class="pill" x="40" y="146" width="152" height="68" rx="3" />
+  <path class="track" d="M 52 198 L 76 172 L 96 184 L 124 158 L 150 176 L 178 162" />
+  <circle cx="52" cy="198" r="3.5" fill="#1d2622" stroke="#ffffff" stroke-width="1.2" />
+  <circle cx="178" cy="162" r="3.5" fill="#9a6a3a" stroke="#ffffff" stroke-width="1.2" />
+  <text class="meta" x="50" y="208">Mi 0.0</text>
+  <text class="meta" x="182" y="156" text-anchor="end">Mi 211.4</text>
+
+  <line class="divider" x1="40" y1="230" x2="192" y2="230" />
+  <text class="h2" x="40" y="250">Normalized &amp; Hashed</text>
+  <text class="body" x="40" y="268">• Joins tracks in order</text>
+  <text class="body" x="40" y="285">• Computes cumulative mi</text>
+  <text class="body" x="40" y="302">• Sends coords once; later</text>
+  <text class="body" x="48" y="317">checks send only hash</text>
+  <text class="meta" x="40" y="336">POST /api/analyze</text>
+
+  <!-- Arrow 1 -> 2 -->
+  <line class="arrow" x1="208" y1="202" x2="234" y2="202" />
+  <polygon class="arrow-head" points="238,202 231,198 231,206" />
+
+  <!-- ================= STAGE 2: DATA SOURCES ================= -->
+  <!-- Top Box: Official Reports -->
+  <rect class="card" x="240" y="54" width="268" height="154" rx="4" />
+  <rect x="240" y="54" width="5" height="154" rx="2" fill="#dc3a1c" />
+  <text class="step-num" x="258" y="76">02A · OFFICIAL FEEDS (SOLID)</text>
+  <text class="h1" x="258" y="95">Reported Agency Data</text>
+  <text class="body" x="258" y="116">• NIFC WFIGS active fire perimeters &amp; origins</text>
+  <text class="body" x="258" y="134">• NWS active watches, warnings &amp; advisories</text>
+  <text class="body" x="258" y="152">• Avalanche.org forecast zones (1–5 scale)</text>
+  <text class="body" x="258" y="170">• NOAA NWPS flood gauges (≤ 0.75 mi)</text>
+  <text class="body" x="258" y="188">• EPA AirNow PM2.5 + NOAA HMS smoke</text>
+
+  <!-- Bottom Box: Modeled Estimates -->
+  <rect class="card-dashed" x="240" y="220" width="268" height="130" rx="4" />
+  <rect x="240" y="220" width="5" height="130" rx="2" fill="#ee7a14" />
+  <text class="step-num" x="258" y="242">02B · MODELED ESTIMATES (DASHED)</text>
+  <text class="h1" x="258" y="261">Weather &amp; Trail Physics</text>
+  <text class="body" x="258" y="281">• NWS 72 h gridded forecast (lapse-adjusted)</text>
+  <text class="body" x="258" y="299">• NOAA NAQFC &amp; CAMS 48 h smoke forecast</text>
+  <text class="body" x="258" y="317">• Hourly snow, ice &amp; mud model (SNODAS,</text>
+  <text class="body" x="266" y="333">Open-Meteo 10 d history, LANDFIRE, canopy)</text>
+
+  <!-- Arrows 2 -> 3 -->
+  <line class="arrow" x1="508" y1="131" x2="534" y2="165" />
+  <polygon class="arrow-head" points="537,168 530,165 535,160" />
+  <line class="arrow" x1="508" y1="285" x2="534" y2="245" />
+  <polygon class="arrow-head" points="537,242 535,250 530,245" />
+
+  <!-- ================= STAGE 3: FUSION ENGINE ================= -->
+  <rect class="card" x="540" y="54" width="188" height="296" rx="4" />
+  <text class="step-num" x="556" y="76">03 · FUSION ENGINE</text>
+  <text class="h1" x="556" y="96">Mile-by-Mile Check</text>
+  <text class="meta" x="556" y="113">1 mi chunks · 0.1 mi fine samples</text>
+
+  <rect class="pill" x="556" y="126" width="156" height="44" rx="3" />
+  <text class="h2" x="566" y="144">Spatial Detectors</text>
+  <text class="meta" x="566" y="160">Grid-indexed PIP &amp; proximity</text>
+
+  <rect class="pill" x="556" y="178" width="156" height="44" rx="3" />
+  <text class="h2" x="566" y="196">Source Health Guard</text>
+  <text class="meta" x="566" y="212">ok · stale · partial · error</text>
+
+  <rect class="pill" x="556" y="230" width="156" height="44" rx="3" />
+  <text class="h2" x="566" y="248">Range Consolidation</text>
+  <text class="meta" x="566" y="264">Merges identical hazard spans</text>
+
+  <line class="divider" x1="556" y1="288" x2="712" y2="288" />
+  <text class="body" x="556" y="307">Estimates are capped at</text>
+  <text class="h2" x="556" y="323">Moderate (Level 2)</text>
+  <text class="meta" x="556" y="338">Never outranks official warnings</text>
+
+  <!-- Arrow 3 -> 4 -->
+  <line class="arrow" x1="728" y1="202" x2="754" y2="202" />
+  <polygon class="arrow-head" points="758,202 751,198 751,206" />
+
+  <!-- ================= STAGE 4: VERDICT & OFFLINE ================= -->
+  <rect class="card" x="760" y="54" width="176" height="296" rx="4" />
+  <text class="step-num" x="776" y="76">04 · FIELD OUTPUT</text>
+  <text class="h1" x="776" y="96">Route Verdict</text>
+
+  <!-- Mini verdict plaque -->
+  <rect x="776" y="110" width="144" height="46" rx="2" fill="#dc3a1c" />
+  <text x="786" y="128" font-size="12" font-weight="800" fill="#ffffff">High</text>
+  <text x="786" y="144" font-size="10.5" font-weight="600" fill="#ffffff">Wildfire: Sisi (Mi 42–47)</text>
+
+  <!-- Mini segment bar -->
+  <rect x="776" y="166" width="38" height="8" fill="#2f9e5b" />
+  <rect x="816" y="166" width="28" height="8" fill="#ee7a14" />
+  <rect x="846" y="166" width="34" height="8" fill="#dc3a1c" />
+  <rect x="882" y="166" width="38" height="8" fill="#66726b" />
+  <text class="meta" x="776" y="188">Clear · Est · Official · Unchecked</text>
+
+  <line class="divider" x1="776" y1="200" x2="920" y2="200" />
+  <text class="h2" x="776" y="220">Plan &amp; On-Trail Modes</text>
+  <text class="body" x="776" y="238">• Full route or 5–50 mi ahead</text>
+  <text class="body" x="776" y="256">• Sunset &amp; civil dusk at fix</text>
+  <text class="body" x="776" y="274">• IndexedDB offline cache</text>
+  <text class="body" x="776" y="292">• Diffs against last check</text>
+  <text class="meta" x="776" y="336">Outages never read as clear</text>
+
+  <!-- Footer bar -->
+  <line class="divider" x1="24" y1="364" x2="936" y2="364" />
+  <text class="meta" x="24" y="382">CACHE POLICY: 5–60 min fresh TTL · Up to 6 h stale fallback on upstream error · In-flight request deduplication</text>
+  <text class="meta" x="936" y="382" text-anchor="end">RIDGELINE v2</text>
+</svg>

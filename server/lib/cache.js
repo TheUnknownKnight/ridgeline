@@ -168,6 +168,8 @@ export const createCache = ({ maxEntries = 500, maxWeight = Infinity, weigh = ()
     set: (key, value, opts) => { set(key, value, opts); },
     /** Forget one key (and any remembered failure), so the next wrap fetches afresh. */
     delete: (key) => { remove(key); failures.delete(key); },
+    /** Forget remembered negative failures while keeping valid cached values. */
+    clearFailures: () => { failures.clear(); },
     clear,
     stats: () => ({ keys: entries.size, weight: totalWeight, inflight: inflight.size, failures: failures.size, ...stats }),
   };

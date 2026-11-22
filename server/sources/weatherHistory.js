@@ -8,14 +8,14 @@ import { mapLimit } from '../lib/pool.js';
  * conditions model, and the past 48 h of it is the "recent rain" the weather
  * check reports, so both share one request per cell.
  *
- * One location with 5 hourly variables over 13 days counts as one call
+ * One location with 7 hourly variables over 13 days counts as one call
  * against Open-Meteo's free tier (non-commercial, 10k/day, 600/min).
  */
 export const ATTRIBUTION = 'Open-Meteo (CC BY 4.0)';
 export const SOURCE_URL = 'https://open-meteo.com/';
 
 const URL = 'https://api.open-meteo.com/v1/forecast';
-const HOURLY = ['temperature_2m', 'dew_point_2m', 'precipitation', 'cloud_cover', 'et0_fao_evapotranspiration'];
+const HOURLY = ['temperature_2m', 'dew_point_2m', 'precipitation', 'cloud_cover', 'et0_fao_evapotranspiration', 'wind_speed_10m', 'wind_gusts_10m'];
 // Ten days covers drying and refreeze; older snow comes from NOAA's snow analysis.
 const PAST_DAYS = 10;
 const FORECAST_DAYS = 3;
@@ -29,6 +29,7 @@ const BATCH = 25;
 const CONCURRENCY = 2;
 // ~1 cell per 35 mi on a 3,400-mi route; each point is still lapse-corrected to its own elevation.
 export const MAX_CELLS = 100;
+const SOFT_BUDGET_MS = 16500;
 
 const snap = (v) => Math.round(v / SNAP_DEG) * SNAP_DEG;
 export const cellKeyOf = (p) => `${snap(p.lat).toFixed(2)},${snap(p.lon).toFixed(2)}`;
@@ -46,6 +47,8 @@ const toCell = (loc) => {
     P: h.precipitation,
     cloud: h.cloud_cover,
     et0: h.et0_fao_evapotranspiration,
+    wind: h.wind_speed_10m || [],
+    gust: h.wind_gusts_10m || [],
   };
 };
 
@@ -69,12 +72,13 @@ const fetchBatch = async (keys) => {
     latitude: keys.map(k => k.split(',')[0]).join(','),
     longitude: keys.map(k => k.split(',')[1]).join(','),
     hourly: HOURLY.join(','),
+    wind_speed_unit: 'ms',
     past_days: String(PAST_DAYS),
     forecast_days: String(FORECAST_DAYS),
     timezone: 'GMT',
     timeformat: 'unixtime',
   });
-  const data = asArray(await fetchJson(`${URL}?${qs}`, { label: 'Open-Meteo hourly', timeoutMs: 15000, retries: 1, maxBytes: 20 * 1024 * 1024 }));
+  const data = asArray(await fetchJson(`${URL}?${qs}`, { label: 'Open-Meteo hourly', timeoutMs: 10000, retries: 1, maxBytes: 20 * 1024 * 1024 }));
   if (data.length !== keys.length) throw new Error(`Open-Meteo hourly: expected ${keys.length} locations, got ${data.length}`);
   return data.map(toCell);
 };
@@ -96,15 +100,19 @@ export const loadCells = async (keys) => {
     const old = sourceCache.peek(`om:hourly:${k}`);
     if (old) { out.set(k, old.value); stale++; } else { out.set(k, null); failed++; }
   };
-  for (const k of new Set(keys)) {
+  const uniqueKeys = [...new Set(keys)];
+  for (const k of uniqueKeys) {
     const v = sourceCache.get(`om:hourly:${k}`);
     if (v !== undefined) out.set(k, v);
-    else if (pending.has(k)) waits.push(pending.get(k).then(v => settle(k, v)));
+    else if (pending.has(k)) waits.push(pending.get(k).then(v => { if (!done) settle(k, v); }));
     else misses.push(k);
   }
   const batches = [];
   for (let i = 0; i < misses.length; i += BATCH) batches.push(misses.slice(i, i + BATCH));
-  await Promise.all([
+  const deadlineAt = Date.now() + SOFT_BUDGET_MS;
+  let done = false;
+  let waitTimer;
+  const jobs = Promise.all([
     ...waits,
     mapLimit(batches, batches.length || 1, async (batch) => {
       const job = withSlot(() => fetchBatch(batch));
@@ -113,26 +121,47 @@ export const loadCells = async (keys) => {
         const cells = await job;
         batch.forEach((k, i) => {
           sourceCache.set(`om:hourly:${k}`, cells[i], { ttlMs: TTL_MS, staleMs: STALE_MS });
-          out.set(k, cells[i]);
+          if (!done) out.set(k, cells[i]);
         });
       } catch (err) {
         console.error('[open-meteo] hourly batch failed:', err.message);
-        for (const k of batch) settle(k, null);
+        if (!done) for (const k of batch) settle(k, null);
       } finally {
         for (const k of batch) pending.delete(k);
       }
-    }),
+    }, { deadlineAt }),
   ]);
-  return { cells: out, failed, stale, total: new Set(keys).size };
+  jobs.catch(() => {});
+  try {
+    await Promise.race([
+      jobs,
+      new Promise((resolve) => { waitTimer = setTimeout(resolve, SOFT_BUDGET_MS); }),
+    ]);
+  } finally {
+    clearTimeout(waitTimer);
+    done = true;
+  }
+  for (const k of uniqueKeys) if (!out.has(k)) settle(k, null);
+  return { cells: out, failed, stale, total: uniqueKeys.length };
 };
 
-/** Rain (mm) over the 48 hours before `now` in one cell, or null. */
-export const past48hMm = (cell, now) => {
+/** Liquid rain (mm) over the 48 hours before `now` in one cell (excluding snow), or null. */
+export const past48hMm = (cell, now, { elevM = null } = {}) => {
   if (!cell) return null;
+  const gap = elevM != null && cell.elevation != null ? elevM - cell.elevation : 0;
+  const lapseC = Math.abs(gap) > 150 && Math.abs(gap) <= 1500 ? (gap / 1000) * 6.5 : 0;
   let sum = 0;
   let n = 0;
   for (let i = 0; i < cell.time.length; i++) {
-    if (cell.time[i] <= now && cell.time[i] > now - 48 * 3600 * 1000 && typeof cell.P[i] === 'number') { sum += cell.P[i]; n++; }
+    if (cell.time[i] <= now && cell.time[i] > now - 48 * 3600 * 1000 && typeof cell.P[i] === 'number') {
+      let rainFrac = 1;
+      if (typeof cell.Ta?.[i] === 'number') {
+        const t = cell.Ta[i] - lapseC;
+        rainFrac = t <= 0 ? 0 : t >= 2 ? 1 : t / 2;
+      }
+      sum += cell.P[i] * rainFrac;
+      n++;
+    }
   }
   return n ? sum : null;
 };
@@ -145,7 +174,7 @@ export const past48hMm = (cell, now) => {
 export const loadTimeZone = async (lat, lon) => {
   const key = `${(Math.round(lat * 2) / 2).toFixed(1)},${(Math.round(lon * 2) / 2).toFixed(1)}`;
   try {
-    const { value } = await sourceCache.wrap(`om:tz:${key}`, { ttlMs: 30 * 24 * 3600 * 1000, errorTtlMs: 5 * 60 * 1000 }, async () => {
+    const { value } = await sourceCache.wrap(`om:tz:${key}`, { ttlMs: 30 * 24 * 3600 * 1000, errorTtlMs: 30 * 1000 }, async () => {
       const qs = new URLSearchParams({ latitude: lat.toFixed(3), longitude: lon.toFixed(3), timezone: 'auto', forecast_days: '1', daily: 'sunrise' });
       const data = await withSlot(() => fetchJson(`${URL}?${qs}`, { label: 'Open-Meteo time zone', timeoutMs: 6000, retries: 0 }));
       if (typeof data?.timezone !== 'string' || !data.timezone.includes('/')) throw new Error('no time zone');

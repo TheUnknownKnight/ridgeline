@@ -1,15 +1,60 @@
-import { inflateSync } from 'node:zlib';
-
-const SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const SIGNATURE = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const MAX_PIXELS = 4096 * 4096;
+
+const toBytes = (input) => {
+  if (input instanceof Uint8Array) return input;
+  if (input instanceof ArrayBuffer) return new Uint8Array(input);
+  if (ArrayBuffer.isView(input)) return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+  return null;
+};
+
+const hasSignature = (buf) => {
+  if (!buf || buf.byteLength < 8) return false;
+  for (let i = 0; i < 8; i++) if (buf[i] !== SIGNATURE[i]) return false;
+  return true;
+};
+
+const concatBytes = (parts) => {
+  let total = 0;
+  for (const p of parts) total += p.byteLength;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const p of parts) {
+    out.set(p, offset);
+    offset += p.byteLength;
+  }
+  return out;
+};
+
+const inflateZlib = async (chunks) => {
+  let idx = 0;
+  const stream = new ReadableStream({
+    pull(controller) {
+      while (idx < chunks.length && chunks[idx].byteLength === 0) idx++;
+      if (idx < chunks.length) controller.enqueue(chunks[idx++]);
+      else controller.close();
+    },
+  }).pipeThrough(new DecompressionStream('deflate'));
+
+  const reader = stream.getReader();
+  const out = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    out.push(value instanceof Uint8Array ? value : new Uint8Array(value));
+  }
+  return concatBytes(out);
+};
 
 /**
  * Minimal PNG decoder for map-service images: 8-bit (or lower) indexed,
  * grey, RGB or RGBA, non-interlaced. Returns { width, height, rgba(x, y) }.
  * Throws on anything else rather than guessing.
  */
-export const decodePng = (buf) => {
-  if (!Buffer.isBuffer(buf) || buf.length < 8 || !buf.subarray(0, 8).equals(SIGNATURE)) throw new Error('not a PNG');
+export const decodePng = async (input) => {
+  const buf = toBytes(input);
+  if (!hasSignature(buf)) throw new Error('not a PNG');
+  const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   let p = 8;
   let width = 0;
   let height = 0;
@@ -18,13 +63,15 @@ export const decodePng = (buf) => {
   let palette = null;
   let trns = null;
   const idat = [];
-  while (p + 8 <= buf.length) {
-    const len = buf.readUInt32BE(p);
-    const type = buf.toString('ascii', p + 4, p + 8);
+  while (p + 8 <= buf.byteLength) {
+    const len = view.getUint32(p, false);
+    if (p + 8 + len > buf.byteLength) throw new Error('truncated PNG');
+    const type = String.fromCharCode(buf[p + 4], buf[p + 5], buf[p + 6], buf[p + 7]);
     const data = buf.subarray(p + 8, p + 8 + len);
     if (type === 'IHDR') {
-      width = data.readUInt32BE(0);
-      height = data.readUInt32BE(4);
+      if (len < 13) throw new Error('truncated PNG');
+      width = view.getUint32(p + 8, false);
+      height = view.getUint32(p + 12, false);
       bitDepth = data[8];
       colorType = data[9];
       if (data[12]) throw new Error('interlaced PNG not supported');
@@ -35,15 +82,16 @@ export const decodePng = (buf) => {
     p += 12 + len;
   }
   const channels = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[colorType];
-  if (!channels || bitDepth > 8 || !width || !height || width * height > MAX_PIXELS) throw new Error('unsupported PNG');
+  if (!channels || !bitDepth || bitDepth > 8 || !width || !height || width * height > MAX_PIXELS) throw new Error('unsupported PNG');
   if (colorType === 3 && !palette) throw new Error('indexed PNG without a palette');
+  if (idat.length === 0) throw new Error('truncated PNG');
 
-  const raw = inflateSync(Buffer.concat(idat));
+  const raw = await inflateZlib(idat);
   const bpp = Math.max(1, (channels * bitDepth) >> 3);
   const stride = Math.ceil((width * channels * bitDepth) / 8);
-  if (raw.length < (stride + 1) * height) throw new Error('truncated PNG');
-  const px = Buffer.alloc(stride * height);
-  let prev = Buffer.alloc(stride);
+  if (raw.byteLength < (stride + 1) * height) throw new Error('truncated PNG');
+  const px = new Uint8Array(stride * height);
+  let prev = new Uint8Array(stride);
   for (let y = 0; y < height; y++) {
     const filter = raw[y * (stride + 1)];
     const line = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));

@@ -1,10 +1,13 @@
-import { projectOntoRoute, pointAtMile } from '../../shared/geo.js';
+import { projectOntoRoute, pointAtMile, simplifyLine } from '../../shared/geo.js';
 import { daylight } from '../../shared/sun.js';
 import { SOURCE_KEYS } from '../../shared/levels.js';
 import { getRouteModel, forecastSamples } from './route.js';
 import { createHitTable, consolidate } from './consolidate.js';
 import { buildSummary } from './summary.js';
 import { countVertices } from '../lib/spatial.js';
+import { sourceCache } from '../lib/cache.js';
+import { clearTerrainFailures } from '../sources/terrain.js';
+import { clearSnowFailures } from '../sources/snodas.js';
 import { loadFire } from '../sources/nifc.js';
 import { loadAlerts } from '../sources/nwsAlerts.js';
 import { loadAvalanche } from '../sources/avalanche.js';
@@ -36,6 +39,7 @@ const MAX_SMOKE_POINTS = 120;
 const MIN_SMOKE_SPACING = 2;
 const MAX_OVERLAY_VERTICES = 60000;
 const OFFICIAL_SOURCES = ['fire', 'alerts', 'avalanche', 'water', 'air'];
+const M_TO_FT = 3.28084;
 
 const round2 = (n) => Math.round(n * 100) / 100;
 
@@ -65,7 +69,7 @@ const safeLoad = async (label, fn, ctx, deadlineMs = SOURCE_DEADLINE_MS) => {
 const fmtMiles = (m) => (m < 10 ? m.toFixed(1) : String(Math.round(m)));
 
 /** Plain-language notes about what could not be checked, shown with the verdict. */
-const buildCaveats = ({ route, outside, avalancheUnchecked, coverage, window, forecastOk, airUnchecked, smokeOk }) => {
+const buildCaveats = ({ route, outside, avalancheUnchecked, coverage, window, forecastOk, airUnchecked, smokeOk, itineraryBeyondForecastMiles = 0 }) => {
   const caveats = [];
   const miles = (set) => [...set].reduce((n, i) => n + (route.chunks[i].end - route.chunks[i].start), 0);
   if (outside.size) {
@@ -80,6 +84,9 @@ const buildCaveats = ({ route, outside, avalancheUnchecked, coverage, window, fo
   }
   if (window && forecastOk) {
     caveats.push(`Forecast hazards were checked for Mi ${fmtMiles(window.start)}–${fmtMiles(window.end)} (your lookahead) over the next 72 hours.`);
+  }
+  if (itineraryBeyondForecastMiles > 0 && forecastOk) {
+    caveats.push(`${fmtMiles(itineraryBeyondForecastMiles)} mi of this itinerary falls beyond the 7-day NWS forecast horizon — weather hazards were not checked for those later days.`);
   }
   return caveats;
 };
@@ -108,27 +115,111 @@ const avalancheCoverageMessage = (base, coverage) => {
   return `${base}. Not rated on this route: ${list}${more}`;
 };
 
-const capOverlays = (features) => {
+const featureVertices = (f) => {
+  if (f.geometry.type === 'Point') return 1;
+  return countVertices(f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates);
+};
+
+const simplifyRing = (ring, toleranceMiles) => {
+  if (!Array.isArray(ring) || ring.length <= 12) return ring;
+  const s = simplifyLine(ring, toleranceMiles);
+  if (s.length < 4) return ring.length >= 4 ? ring : s;
+  const first = s[0];
+  const last = s[s.length - 1];
+  if (first[0] !== last[0] || first[1] !== last[1]) s.push(first);
+  return s;
+};
+
+const simplifyGeometry = (geom, toleranceMiles) => {
+  if (geom.type === 'Polygon') {
+    return { ...geom, coordinates: geom.coordinates.map((r, i) => (i === 0 || r.length > 12 ? simplifyRing(r, toleranceMiles) : r)) };
+  }
+  if (geom.type === 'MultiPolygon') {
+    return {
+      ...geom,
+      coordinates: geom.coordinates.map(poly => poly.map((r, i) => (i === 0 || r.length > 12 ? simplifyRing(r, toleranceMiles) : r))),
+    };
+  }
+  return geom;
+};
+
+/** Simplify oversized polygons before dropping overlays to stay under the vertex budget. */
+export const capOverlays = (features, maxVertices = MAX_OVERLAY_VERTICES) => {
   const sorted = [...features].sort((a, b) => (b.properties.level || 0) - (a.properties.level || 0));
+  const rawTotal = sorted.reduce((sum, f) => sum + featureVertices(f), 0);
+  const needsBudgetPass = rawTotal > maxVertices;
   const out = [];
   let vertices = 0;
   let dropped = 0;
+  let simplified = 0;
+
   for (const f of sorted) {
-    const n = f.geometry.type === 'Point' ? 1
-      : countVertices(f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates);
-    if (vertices + n > MAX_OVERLAY_VERTICES) { dropped++; continue; }
+    let feat = f;
+    let n = featureVertices(feat);
+    if (f.geometry.type !== 'Point' && (n > 1500 || (needsBudgetPass && n > 60))) {
+      for (const tol of needsBudgetPass ? [0.05, 0.2] : [0.05]) {
+        const g = simplifyGeometry(feat.geometry, tol);
+        const gn = countVertices(g.type === 'Polygon' ? [g.coordinates] : g.coordinates);
+        if (gn < n) { feat = { ...feat, geometry: g }; n = gn; }
+        if (vertices + n <= maxVertices && n <= 1500) break;
+      }
+      if (feat !== f) simplified++;
+    }
+    if (vertices + n > maxVertices) { dropped++; continue; }
     vertices += n;
-    out.push(f);
+    out.push(feat);
   }
-  if (dropped) console.warn(`[engine] dropped ${dropped} map overlays over the ${MAX_OVERLAY_VERTICES}-vertex budget`);
-  return out;
+  if (dropped) console.warn(`[engine] dropped ${dropped} map overlays over the ${maxVertices}-vertex budget`);
+  return { features: out, stats: { total: sorted.length, kept: out.length, simplified, dropped, vertices } };
+};
+
+const elevationStatsFromSeries = (elevations, source) => {
+  let minM = Infinity;
+  let maxM = -Infinity;
+  let gainM = 0;
+  let lossM = 0;
+  let prev = null;
+  for (const e of elevations) {
+    if (!Number.isFinite(e)) continue;
+    if (e < minM) minM = e;
+    if (e > maxM) maxM = e;
+    if (prev != null) {
+      const d = e - prev;
+      if (d > 0) gainM += d;
+      else lossM -= d;
+    }
+    prev = e;
+  }
+  if (!Number.isFinite(minM)) return null;
+  return {
+    min: Math.round(minM * M_TO_FT),
+    max: Math.round(maxM * M_TO_FT),
+    gain: Math.round(gainM * M_TO_FT),
+    loss: Math.round(lossM * M_TO_FT),
+    source,
+  };
+};
+
+const computeElevationSummary = ({ route, terrainPoints }) => {
+  if (route.hasElevation) {
+    return elevationStatsFromSeries(route.coords.map(c => (c.length > 2 ? c[2] : null)), 'route');
+  }
+  if (Array.isArray(terrainPoints)) {
+    return elevationStatsFromSeries(terrainPoints.map(t => t.elevM), 'landfire');
+  }
+  return null;
 };
 
 /**
  * Analyze a validated request (see lib/validate.js). Sources are injectable
  * so tests can run the full pipeline offline.
  */
-export const analyze = async (request, { sources = defaultSources, now = Date.now(), deadlineMs = SOURCE_DEADLINE_MS } = {}) => {
+export const analyze = async (request, { sources = defaultSources, now = Date.now(), deadlineMs = SOURCE_DEADLINE_MS, scope = 'nationwide' } = {}) => {
+  if (request.refresh) {
+    sourceCache.clearFailures();
+    clearTerrainFailures();
+    clearSnowFailures();
+  }
   const route = await getRouteModel(request);
   const L = route.lengthMiles;
 
@@ -149,6 +240,7 @@ export const analyze = async (request, { sources = defaultSources, now = Date.no
     };
   }
 
+  const trip = !window ? (request.trip || null) : null;
   const range = window ? { start: window.start, end: window.end } : { start: 0, end: L };
   const span = Math.max(0.01, range.end - range.start);
   const spacing = window ? ON_TRAIL_FORECAST_SPACING : Math.max(PLANNING_MIN_SPACING, L / MAX_FORECAST_POINTS);
@@ -156,7 +248,7 @@ export const analyze = async (request, { sources = defaultSources, now = Date.no
   const smokeSpacing = Math.max(MIN_SMOKE_SPACING, span / MAX_SMOKE_POINTS);
   const sSamples = forecastSamples(route, range.start, range.end, Math.min(smokeSpacing, span));
 
-  const ctx = { route, now };
+  const ctx = { route, now, scope };
   const [fire, alerts, avalanche, water, air, forecast, recentPrecip, smoke, conditions] = await Promise.all([
     safeLoad('Wildfire', sources.loadFire, ctx, deadlineMs),
     safeLoad('NWS alerts', sources.loadAlerts, ctx, deadlineMs),
@@ -172,17 +264,18 @@ export const analyze = async (request, { sources = defaultSources, now = Date.no
   // The NWS forecast names the route's zone; without it (outage, abroad) the conditions loader looked one up.
   const timeZone = forecast.data?.points?.find(p => p.timeZone)?.timeZone || conditions.data?.timeZone || undefined;
   const opts = { now, timeZone };
+  const condResult = detectConditions(route, conditions.data, opts);
   const results = {
+    conditions: condResult,
     fire: detectFire(route, fire.data, opts),
-    alerts: detectAlerts(route, alerts.data, opts),
-    avalanche: detectAvalanche(route, avalanche.data, opts),
-    water: detectWater(route, water.data, opts),
+    alerts: detectAlerts(route, alerts.data, { ...opts, trip }),
+    avalanche: detectAvalanche(route, avalanche.data, { ...opts, terrainPoints: condResult.terrainPoints }),
+    water: detectWater(route, water.data, { ...opts, trip, hydrology: condResult.hydrology }),
     air: detectAir(route, air.data, opts),
     forecast: detectWeather(route, forecast.data, recentPrecip.status === 'error' ? null : recentPrecip.data, {
-      ...opts, range, maxGapMiles: spacing / 2 + 0.75,
+      ...opts, range, maxGapMiles: spacing / 2 + 0.75, trip, terrainPoints: condResult.terrainPoints,
     }),
     smoke: detectSmoke(route, smoke.data, { ...opts, range, maxGapMiles: smokeSpacing / 2 + 0.75 }),
-    conditions: detectConditions(route, conditions.data, opts),
   };
 
   const catalog = new Map();
@@ -220,6 +313,7 @@ export const analyze = async (request, { sources = defaultSources, now = Date.no
 
   const { segments, hazards } = consolidate(route.chunks, table, checkedFor, catalog);
 
+  const itineraryBeyondForecastMiles = round2(results.forecast.itineraryBeyondForecastMiles || 0);
   const precipNote = recentPrecip.status === 'error' ? '. Recent rainfall unavailable, so rain totals are forecast only' : '';
   const sourcesOut = {
     fire: publicSource(fire),
@@ -230,7 +324,8 @@ export const analyze = async (request, { sources = defaultSources, now = Date.no
     forecast: publicSource(forecast, {
       sampledEveryMiles: round2(spacing),
       range: [round2(range.start), round2(range.end)],
-      horizonHours: 72,
+      horizonHours: trip ? 168 : 72,
+      ...(trip ? { beyondHorizonMiles: itineraryBeyondForecastMiles } : {}),
     }),
     smoke: publicSource(smoke, { sampledEveryMiles: round2(smokeSpacing) }),
     conditions: publicSource(conditions, { range: [round2(range.start), round2(range.end)] }),
@@ -239,7 +334,8 @@ export const analyze = async (request, { sources = defaultSources, now = Date.no
   sourcesOut.forecast.message += precipNote;
   for (const k of SOURCE_KEYS) if (!sourcesOut[k]) sourcesOut[k] = { status: 'skipped', fetchedAt: null, message: '', attribution: '', url: null };
 
-  const overlays = capOverlays(Object.values(results).flatMap(r => r.overlays || []));
+  const overlayCap = capOverlays(Object.values(results).flatMap(r => r.overlays || []));
+  const elevationStats = computeElevationSummary({ route, terrainPoints: condResult.terrainPoints });
 
   // Daylight where the hiker is (On trail) or at the trailhead (Planning).
   const [sunLon, sunLat, sunEle] = position
@@ -253,12 +349,14 @@ export const analyze = async (request, { sources = defaultSources, now = Date.no
     routeHash: route.routeHash,
     generatedAt: new Date(now).toISOString(),
     mode: window ? 'on-trail' : 'planning',
+    trip,
     route: {
       name: request.name || null,
       lengthMiles: round2(L),
       chunkCount: route.chunks.length,
       hasElevation: route.hasElevation,
       timeZone: timeZone || null,
+      elevationFt: elevationStats,
     },
     position,
     window,
@@ -287,11 +385,20 @@ export const analyze = async (request, { sources = defaultSources, now = Date.no
         airUnchecked: air.status === 'error' ? null
           : new Set(route.chunks.map(c => c.i).filter(i => !results.air.checkedChunks.has(i))),
         smokeOk,
+        itineraryBeyondForecastMiles,
       }),
     }),
     segments,
     hazards,
     conditions: results.conditions.block,
-    overlays: { type: 'FeatureCollection', features: overlays },
+    diagnostics: {
+      trip,
+      itineraryBeyondForecastMiles,
+      elevation: elevationStats,
+      conditions: condResult.block?.metrics || null,
+      weather: results.forecast.metrics || null,
+      overlays: overlayCap.stats,
+    },
+    overlays: { type: 'FeatureCollection', features: overlayCap.features },
   };
 };

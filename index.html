@@ -1,109 +1,197 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Ridgeline — route hazard check</title>
-  <meta name="description" content="Check a GPX route against live wildfire, weather alert, avalanche, river, air-quality, smoke and forecast data, with estimated trail conditions — before you go and on the trail.">
-  <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#edf0ea" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#141916" media="(prefers-color-scheme: dark)">
+  <meta name="description" content="Check a GPX route or US trail against live wildfire, weather alert, avalanche, river, air-quality, smoke and forecast data, with estimated trail conditions — before you go and on the trail.">
+  <meta name="color-scheme" content="dark light">
+  <meta name="theme-color" content="#141916">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Ridgeline">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon.svg">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="preconnect" href="https://tiles.openfreemap.org" crossorigin>
+  <link rel="preconnect" href="https://s3.amazonaws.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;800&display=swap">
 </head>
-<body data-view="start" data-mode="planning">
+<body data-view="start" data-mode="planning" data-mobile-tab="explore">
   <noscript>
     <p class="noscript">Ridgeline needs JavaScript to read your route file and check it against live hazard data.</p>
   </noscript>
 
   <main class="app">
-    <aside class="panel" id="panel" role="region" aria-label="Route check">
-      <header class="appbar">
-        <h1 class="brand">
+    <header class="appbar" id="appbar">
+      <h1 class="brand">
+        <button type="button" id="brand-home" class="brand-button" title="Back to start">
           <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
             <path d="M3 24 L11 11 L16 18 L21 9 L29 24" />
             <path class="brand-contour" d="M6 28 H26" />
           </svg>
-          Ridgeline
-        </h1>
+          <span>Ridgeline</span>
+        </button>
+      </h1>
+      <div class="appbar-actions">
         <div class="segmented" id="mode-switch" role="group" aria-label="Mode">
           <button type="button" data-mode="planning" aria-pressed="true">Plan</button>
           <button type="button" data-mode="on-trail" aria-pressed="false">On trail</button>
         </div>
-      </header>
+        <button type="button" id="theme-toggle" class="btn btn-quiet btn-icon theme-toggle" aria-label="Switch to light mode" title="Switch to light mode" aria-pressed="false">
+          <svg class="icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+          </svg>
+          <svg class="icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11z" />
+          </svg>
+        </button>
+      </div>
+    </header>
 
-      <div id="banner" class="banners"></div>
+    <aside class="panel" id="panel" role="region" aria-label="Route check">
+      <div class="panel-scroll" id="panel-scroll">
+        <div id="banner" class="banners"></div>
 
-      <section id="start-view" class="start" aria-labelledby="start-title">
-        <div class="start-intro">
-          <h2 id="start-title" class="start-title">Is your route clear?</h2>
-          <p class="start-lede">Ridgeline checks your track against live wildfire perimeters, National Weather Service alerts, avalanche forecasts, river gauges, measured air quality, smoke and the weather forecast, estimates what's underfoot, then tells you what's on the route and exactly where.</p>
-        </div>
-        <div id="dropzone" class="dropzone">
-          <p class="dropzone-text">Drop a GPX, KML or GeoJSON file here</p>
-          <div class="dropzone-actions">
-            <button type="button" id="open-file" class="btn btn-primary">
-              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 15V4M7.5 8.5L12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" /></svg>
-              Open GPX file
+        <section id="start-view" class="start" aria-labelledby="start-title">
+          <div class="start-intro">
+            <h2 id="start-title" class="start-title">Is your route clear?</h2>
+            <p class="start-lede">Search US trails or drop a GPX track to check live wildfires, NWS alerts, avalanche forecasts, river gauges, air quality, smoke, weather and trail conditions.</p>
+          </div>
+
+          <div id="explore-slot" class="explore-slot"></div>
+
+          <div id="dropzone" class="dropzone">
+            <p class="dropzone-text">Drop a GPX, KML or GeoJSON file here</p>
+            <div class="dropzone-actions">
+              <button type="button" id="open-file" class="btn btn-primary">
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 15V4M7.5 8.5L12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" /></svg>
+                Open GPX file
+              </button>
+              <button type="button" id="try-sample" class="btn">Try a sample route</button>
+            </div>
+            <p class="dropzone-hint">Export a track from Gaia GPS, CalTopo, FarOut, AllTrails or your GPS watch. Only the track's points are sent for the check; the file stays on this device.</p>
+            <input type="file" id="file-input" hidden>
+          </div>
+          <div id="recent"></div>
+          <p class="disclaimer">Ridgeline summarizes public data. Conditions change fast — always check with the land manager and official forecasts before you go.</p>
+        </section>
+
+        <section id="briefing-empty" class="mobile-empty" aria-labelledby="briefing-empty-title">
+          <svg class="mobile-empty-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M3 19l6-11 4 6 3-4 5 9H3z" />
+          </svg>
+          <h2 id="briefing-empty-title" class="mobile-empty-title">No route selected yet</h2>
+          <p class="mobile-empty-copy">Find a US trail or upload a GPX track to see its verdict, live hazards, mile-by-mile log, and trail conditions.</p>
+          <div class="mobile-empty-actions">
+            <button type="button" id="briefing-go-explore" class="btn btn-primary">Explore trails</button>
+            <button type="button" id="briefing-try-sample" class="btn">Try a sample route</button>
+          </div>
+        </section>
+
+        <section id="route-view" class="route-view" aria-labelledby="route-name" hidden>
+          <div class="route-head">
+            <div class="route-id">
+              <h2 id="route-name" class="route-name" tabindex="-1"></h2>
+              <p id="route-meta" class="route-meta"></p>
+            </div>
+            <div class="route-actions">
+              <button type="button" id="check-again" class="btn btn-quiet btn-small">
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4" /></svg>
+                Check again
+              </button>
+              <button type="button" id="change-route" class="btn btn-quiet btn-small">Change route</button>
+            </div>
+          </div>
+
+          <div id="verdict" class="verdict"></div>
+          <div id="verdict-notes" class="verdict-notes"></div>
+          <div id="offline-pack" class="offline-bar" hidden></div>
+          <div id="route-trail-slot">
+            <section id="trail" class="trail" aria-label="Your position" hidden></section>
+          </div>
+          <section id="trip" class="trail trip" aria-label="Trip timing" hidden></section>
+
+          <div id="profile" class="profile-slot"></div>
+          <div id="filters" class="filters" hidden></div>
+          <div id="changes" class="changes-slot" hidden></div>
+
+          <div class="tabs" id="tabs" role="tablist" aria-label="Route details">
+            <button type="button" class="tab" role="tab" id="tab-hazards" data-tab="hazards" aria-controls="panel-hazards" aria-selected="true">
+              What to know <span class="tab-count" id="count-hazards" aria-hidden="true"></span>
             </button>
-            <button type="button" id="try-sample" class="btn">Try a sample route</button>
-          </div>
-          <p class="dropzone-hint">Export a track from Gaia GPS, CalTopo, FarOut, AllTrails or your GPS watch. Only the track's points are sent for the check; the file stays on this device.</p>
-          <input type="file" id="file-input" hidden>
-        </div>
-        <div id="recent"></div>
-        <p class="disclaimer">Ridgeline summarizes public data. Conditions change fast — always check with the land manager and official forecasts before you go.</p>
-      </section>
-
-      <section id="route-view" class="route-view" aria-labelledby="route-name" hidden>
-        <div class="route-head">
-          <div class="route-id">
-            <h2 id="route-name" class="route-name"></h2>
-            <p id="route-meta" class="route-meta"></p>
-          </div>
-          <div class="route-actions">
-            <button type="button" id="check-again" class="btn btn-quiet btn-small">
-              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4" /></svg>
-              Check again
+            <button type="button" class="tab" role="tab" id="tab-log" data-tab="log" aria-controls="panel-log" aria-selected="false" tabindex="-1">
+              Along the route
             </button>
-            <button type="button" id="change-route" class="btn btn-quiet btn-small">Change route</button>
+            <button type="button" class="tab" role="tab" id="tab-conditions" data-tab="conditions" aria-controls="panel-conditions" aria-selected="false" tabindex="-1">
+              Trail conditions
+            </button>
+            <button type="button" class="tab" role="tab" id="tab-sources" data-tab="sources" aria-controls="panel-sources" aria-selected="false" tabindex="-1">
+              Data <span class="tab-flag" id="flag-sources" hidden></span>
+            </button>
           </div>
-        </div>
+          <div class="tabpanel" role="tabpanel" id="panel-hazards" aria-labelledby="tab-hazards" tabindex="0"></div>
+          <div class="tabpanel" role="tabpanel" id="panel-log" aria-labelledby="tab-log" tabindex="0" hidden></div>
+          <div class="tabpanel" role="tabpanel" id="panel-conditions" aria-labelledby="tab-conditions" tabindex="0" hidden></div>
+          <div class="tabpanel" role="tabpanel" id="panel-sources" aria-labelledby="tab-sources" tabindex="0" hidden></div>
+          <div id="scroll-top-wrap" class="scroll-top-wrap" hidden>
+            <button type="button" id="scroll-top" class="btn btn-small scroll-top" aria-label="Back to top of sidebar">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 19V5M6 11l6-6 6 6" /></svg>
+              Back to top
+            </button>
+          </div>
+        </section>
 
-        <div id="verdict" class="verdict"></div>
-        <div id="verdict-notes" class="verdict-notes"></div>
-        <section id="trail" class="trail" aria-label="Your position" hidden></section>
-
-        <div id="profile" class="profile-slot"></div>
-        <div id="filters" class="filters" hidden></div>
-        <div id="changes" class="changes-slot" hidden></div>
-
-        <div class="tabs" id="tabs" role="tablist" aria-label="Route details">
-          <button type="button" class="tab" role="tab" id="tab-hazards" data-tab="hazards" aria-controls="panel-hazards" aria-selected="true">
-            What to know <span class="tab-count" id="count-hazards" aria-hidden="true"></span>
-          </button>
-          <button type="button" class="tab" role="tab" id="tab-log" data-tab="log" aria-controls="panel-log" aria-selected="false" tabindex="-1">
-            Along the route
-          </button>
-          <button type="button" class="tab" role="tab" id="tab-conditions" data-tab="conditions" aria-controls="panel-conditions" aria-selected="false" tabindex="-1">
-            Trail
-          </button>
-          <button type="button" class="tab" role="tab" id="tab-sources" data-tab="sources" aria-controls="panel-sources" aria-selected="false" tabindex="-1">
-            Data <span class="tab-flag" id="flag-sources" hidden></span>
-          </button>
-        </div>
-        <div class="tabpanel" role="tabpanel" id="panel-hazards" aria-labelledby="tab-hazards" tabindex="0"></div>
-        <div class="tabpanel" role="tabpanel" id="panel-log" aria-labelledby="tab-log" tabindex="0" hidden></div>
-        <div class="tabpanel" role="tabpanel" id="panel-conditions" aria-labelledby="tab-conditions" tabindex="0" hidden></div>
-        <div class="tabpanel" role="tabpanel" id="panel-sources" aria-labelledby="tab-sources" tabindex="0" hidden></div>
-      </section>
+        <section id="ontrail-view" class="ontrail-view" aria-label="On trail cockpit">
+          <div id="ontrail-cockpit" class="ontrail-cockpit"></div>
+          <div id="ontrail-trail-slot" class="ontrail-trail-slot"></div>
+        </section>
+      </div>
     </aside>
+
+    <nav id="mobile-nav" class="mobile-nav" aria-label="Mobile navigation">
+      <button type="button" class="mobile-nav-btn is-active" data-mobile-tab="explore" aria-current="page">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="7" /><path d="M20 20l-4.2-4.2" /></svg>
+        <span>Explore</span>
+      </button>
+      <button type="button" class="mobile-nav-btn" data-mobile-tab="briefing">
+        <span class="mobile-nav-icon-wrap">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3.8L2.6 20h18.8L12 3.8zM12 10v4.2M12 17.2v.1" /></svg>
+          <span class="mobile-nav-badge" id="mobile-count-hazards" hidden></span>
+        </span>
+        <span>Briefing</span>
+      </button>
+      <button type="button" class="mobile-nav-btn" data-mobile-tab="map">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2V6zM9 4v14M15 6v14" /></svg>
+        <span>Map</span>
+      </button>
+      <button type="button" class="mobile-nav-btn" data-mobile-tab="ontrail">
+        <span class="mobile-nav-icon-wrap">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3l7 17-7-4-7 4 7-17z" /></svg>
+          <span class="mobile-nav-dot mobile-nav-gps-dot" id="mobile-gps-dot" hidden></span>
+        </span>
+        <span>On Trail</span>
+      </button>
+    </nav>
 
     <div class="map-area" id="map-area">
       <div id="map" class="map"></div>
+
+      <button type="button" id="map-route-pill" class="map-route-pill" aria-label="Back to route briefing">
+        <span id="map-pill-swatch" class="map-pill-swatch" aria-hidden="true"></span>
+        <span id="map-pill-name" class="map-pill-name">Explore trails</span>
+        <span id="map-pill-action" class="map-pill-action">Briefing</span>
+      </button>
+
+      <button type="button" id="map-locate-btn" class="map-locate-btn" aria-label="Center map on my GPS location">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 19a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM12 2v3M12 19v3M2 12h3M19 12h3M12 12.5v-1" /></svg>
+        <span>My location</span>
+      </button>
+
+      <section id="map-inspect-card" class="map-inspect-card" aria-label="Selected map hazard" hidden></section>
+
       <div id="pick-hint" class="pick-hint" hidden>
         <span>Tap the map where you are</span>
         <button type="button" id="pick-cancel" class="btn btn-small">Cancel</button>

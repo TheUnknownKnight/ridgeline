@@ -172,7 +172,7 @@ const chunk = (type, data) => {
   return Buffer.concat([len, body, crc]);
 };
 
-test('png: decodes an indexed image with transparency, rows using different filters', () => {
+test('png: decodes an indexed image with transparency, rows using different filters', async () => {
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(3, 0);
   ihdr.writeUInt32BE(2, 4);
@@ -185,12 +185,12 @@ test('png: decodes an indexed image with transparency, rows using different filt
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk('IHDR', ihdr), chunk('PLTE', palette), chunk('tRNS', trns), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0)),
   ]);
-  const img = decodePng(png);
+  const img = await decodePng(png);
   assert.equal(img.width, 3);
   assert.deepEqual(img.rgba(0, 0), [0, 0, 0, 0]);
   assert.deepEqual(img.rgba(1, 0), [171, 193, 191, 255]);
   assert.deepEqual(img.rgba(0, 1), [60, 63, 194, 255]);
   assert.deepEqual(img.rgba(2, 1), [171, 193, 191, 255]);
   assert.equal(img.rgba(5, 5), null);
-  assert.throws(() => decodePng(Buffer.from('not a png')));
+  await assert.rejects(() => decodePng(Buffer.from('not a png')));
 });

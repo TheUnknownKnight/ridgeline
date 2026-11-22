@@ -100,7 +100,7 @@ export const resultKey = (routeId, mode) => `${routeId}:${mode}`;
 /** Route summaries (no coordinates), most recently opened first. */
 export const listRoutes = async () => (await readAll('routes'))
   .sort((a, b) => b.openedAt - a.openedAt)
-  .map(({ id, name, meta, addedAt, openedAt }) => ({ id, name, meta: meta || {}, addedAt, openedAt }));
+  .map(({ id, name, meta, offlinePack, addedAt, openedAt }) => ({ id, name, meta: meta || {}, offlinePack: offlinePack || null, addedAt, openedAt }));
 
 export const getRoute = (id) => read('routes', id);
 
@@ -126,10 +126,16 @@ export const saveRoute = async (route) => {
     name: route.name,
     coords: route.coords,
     meta: { ...route.meta, lengthMiles: route.lengthMiles },
+    offlinePack: existing?.offlinePack ?? null,
     addedAt: existing?.addedAt ?? now,
     openedAt: now,
   });
   await evictOldRoutes();
+};
+
+export const saveOfflineMeta = async (id, offlinePack) => {
+  const stored = await read('routes', id);
+  if (stored) await write('routes', id, { ...stored, offlinePack });
 };
 
 export const touchRoute = async (id) => {

@@ -12,6 +12,8 @@ export const SOURCE_URL = 'https://avalanche.org/';
 const TTL_MS = 10 * 60 * 1000;
 const REVALIDATE_MS = 20 * 60 * 1000;
 const STALE_MS = 6 * 60 * 60 * 1000;
+// A forecast missing end_date cannot remain active indefinitely.
+const UNDATED_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 
 // Observation/information centers that never issue danger ratings.
 const INFO_ONLY_CENTERS = new Set(['CAC', 'EARAC', 'EWYAIX', 'HAC', 'SOAIX']);
@@ -65,9 +67,10 @@ const fetchZones = async () => {
 export const zoneState = (zone, now) => {
   if (zone.infoOnly) return 'info-only';
   if (zone.endsAt && zone.endsAt <= now) return 'expired';
-  if (zone.dangerLevel >= 1 && zone.dangerLevel <= 5) return 'rated';
+  if (!zone.endsAt && zone.startsAt && now - zone.startsAt > UNDATED_MAX_AGE_MS) return 'expired';
   if (zone.warning) return 'rated';
   if (zone.offSeason) return 'off-season';
+  if (zone.dangerLevel >= 1 && zone.dangerLevel <= 5) return 'rated';
   if (!zone.endsAt) return 'no-forecast';
   return 'no-rating';
 };

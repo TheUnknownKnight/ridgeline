@@ -30,6 +30,7 @@ const POINT_STALE_MS = 6 * 60 * 60 * 1000;
 // Below this many hours ahead the "next 48 hours" promise doesn't hold.
 export const SHORT_HORIZON_HOURS = 40;
 export const UNHEALTHY_FOR_SENSITIVE = 101;
+const MAX_PLAUSIBLE_PM25 = 2000; // reject float32 NoData / corrupt raster sentinels
 
 // The grid's extent (from the service, converted from web mercator). Asking about
 // points far outside it fails the whole request with a 400, so they never go out.
@@ -85,7 +86,7 @@ const fetchCatalog = async (service) => {
 /** The chosen run's rasters for the next 48 h, every STEP_HOURS. */
 const loadCatalog = async (service, now) => {
   const key = `naqfc:catalog:${service}`;
-  const opts = { ttlMs: CATALOG_TTL_MS, staleMs: 6 * 3600 * 1000, errorTtlMs: 60 * 1000 };
+  const opts = { ttlMs: CATALOG_TTL_MS, staleMs: 6 * 3600 * 1000, errorTtlMs: 15 * 1000 };
   let entry = await sourceCache.wrap(key, opts, () => fetchCatalog(service));
   if (!entry.value.complete && now - entry.fetchedAt > INCOMPLETE_RUN_TTL_MS) {
     sourceCache.delete(key);
@@ -128,7 +129,7 @@ const sampleBatch = async (service, rasters, keys) => {
     const key = keys[s.locationId];
     const pm25 = Number(s.value);
     const at = s.attributes?.idp_validtime;
-    if (key == null || !Number.isFinite(pm25) || pm25 < 0 || !Number.isFinite(at)) continue;
+    if (key == null || !Number.isFinite(pm25) || pm25 < 0 || pm25 > MAX_PLAUSIBLE_PM25 || !Number.isFinite(at)) continue;
     if (!out.has(key)) out.set(key, []);
     out.get(key).push({ at, pm25 });
   }

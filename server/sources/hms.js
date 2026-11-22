@@ -21,7 +21,7 @@ const GROWING_TTL_MS = 20 * 60 * 1000;
 const SETTLED_TTL_MS = 6 * 60 * 60 * 1000;
 const SETTLE_AFTER_DAY_END_MS = 12 * 60 * 60 * 1000;
 const STALE_MS = 24 * 60 * 60 * 1000;
-const ERROR_TTL_MS = 5 * 60 * 1000;
+const ERROR_TTL_MS = 15 * 1000;
 const MAX_KML_BYTES = 5 * 1024 * 1024;
 const MAX_PLACEMARKS = 5000;
 const MAX_POLYGONS_PER_PLACEMARK = 200;
@@ -122,7 +122,7 @@ const loadDay = async (dayMs, now) => {
     }, async () => {
       let kml;
       try {
-        kml = await fetchText(url, { label: 'NOAA HMS smoke', timeoutMs: 8000, retries: 0, maxBytes: MAX_KML_BYTES });
+        kml = await fetchText(url, { label: 'NOAA HMS smoke', timeoutMs: 6000, retries: 1, maxBytes: MAX_KML_BYTES });
       } catch (err) {
         if (isToday && err instanceof HttpError && err.status === 404) return { plumes: [], missing: true };
         throw err;

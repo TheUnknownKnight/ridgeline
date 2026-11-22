@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 264" role="img" aria-labelledby="ra-title ra-desc">
+  <title id="ra-title">Reading Ridgeline's route profile and severity scale</title>
+  <desc id="ra-desc">Visual key showing the elevation profile, the segmented hazard band underneath, the five severity colors from Clear to Extreme, the grey Not Checked state, and how solid official warnings differ from dashed or hatched estimates.</desc>
+  <defs>
+    <linearGradient id="ele-fill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9a6a3a" stop-opacity="0.24" />
+      <stop offset="100%" stop-color="#9a6a3a" stop-opacity="0.03" />
+    </linearGradient>
+    <pattern id="hatch-mod" width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+      <rect width="6" height="6" fill="#ee7a14" />
+      <line x1="0" y1="0" x2="0" y2="6" stroke="#ffffff" stroke-width="2" stroke-opacity="0.55" />
+    </pattern>
+  </defs>
+  <style>
+    :root {
+      --paper: #edf0ea;
+      --surface: #ffffff;
+      --ink: #1d2622;
+      --ink-2: #4a5650;
+      --ink-3: #66726b;
+      --rule: #d5dbd3;
+      --rule-strong: #b3bcb3;
+      --contour: #9a6a3a;
+      --you: #1f6fd1;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #141916;
+        --surface: #1d231f;
+        --ink: #e8ece6;
+        --ink-2: #b7c0b9;
+        --ink-3: #8e9891;
+        --rule: #333b36;
+        --rule-strong: #4b544e;
+        --contour: #c9a06e;
+        --you: #6aa8ff;
+      }
+    }
+    text {
+      font-family: 'Overpass', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      fill: var(--ink);
+    }
+    .bg { fill: var(--paper); stroke: var(--rule-strong); stroke-width: 1; }
+    .card { fill: var(--surface); stroke: var(--rule-strong); stroke-width: 1.25; }
+    .tag { font-size: 11px; font-weight: 800; letter-spacing: 0.08em; fill: var(--contour); }
+    .h2 { font-size: 12.5px; font-weight: 700; }
+    .body { font-size: 11.5px; fill: var(--ink-2); }
+    .meta { font-size: 10.5px; fill: var(--ink-3); }
+    .guide { stroke: var(--rule); stroke-width: 1; stroke-dasharray: 2 3; }
+    .divider { stroke: var(--rule); stroke-width: 1; }
+    .ele-line { fill: none; stroke: var(--contour); stroke-width: 2.2; stroke-linejoin: round; stroke-linecap: round; }
+  </style>
+
+  <!-- Outer plate -->
+  <rect class="bg" x="0.5" y="0.5" width="959" height="263" rx="6" />
+
+  <!-- Top Card: Elevation & Hazard Strip Anatomy -->
+  <rect class="card" x="24" y="20" width="912" height="148" rx="4" />
+  <text class="tag" x="42" y="42">ELEVATION &amp; HAZARD STRIP</text>
+  <text class="meta" x="918" y="42" text-anchor="end">Mi 42.3 · 10,840 ft · Moderate (Estimated snow on north aspect)</text>
+
+  <!-- Guides -->
+  <line class="guide" x1="42" y1="64" x2="918" y2="64" />
+  <line class="guide" x1="42" y1="112" x2="918" y2="112" />
+
+  <!-- Elevation area & contour line -->
+  <path d="M 42 108 L 95 96 L 148 82 L 210 88 L 278 62 L 340 78 L 405 68 L 472 54 L 540 84 L 612 72 L 688 58 L 760 88 L 835 76 L 918 98 L 918 116 L 42 116 Z" fill="url(#ele-fill)" />
+  <path class="ele-line" d="M 42 108 L 95 96 L 148 82 L 210 88 L 278 62 L 340 78 L 405 68 L 472 54 L 540 84 L 612 72 L 688 58 L 760 88 L 835 76 L 918 98" />
+
+  <!-- Elevation high/low labels -->
+  <text class="meta" x="472" y="49" text-anchor="middle">13,180 ft</text>
+  <text class="meta" x="46" y="103">4,040 ft</text>
+
+  <!-- Hiker "You" position marker at x=310 -->
+  <line x1="310" y1="54" x2="310" y2="138" stroke="#1f6fd1" stroke-width="2" />
+  <circle cx="310" cy="70" r="4.5" fill="#1f6fd1" stroke="#ffffff" stroke-width="1.8" />
+  <text x="316" y="61" font-size="10.5" font-weight="700" fill="#1f6fd1">You (Mi 42.3)</text>
+
+  <!-- Segmented Hazard Band (y=122, h=14) -->
+  <!-- Clear: 42..240 -->
+  <rect x="42" y="122" width="198" height="14" fill="#2f9e5b" />
+  <!-- Estimated Moderate (hatched): 242..390 -->
+  <rect x="242" y="122" width="148" height="14" fill="url(#hatch-mod)" />
+  <!-- Clear: 392..510 -->
+  <rect x="392" y="122" width="118" height="14" fill="#2f9e5b" />
+  <!-- Official High: 512..640 -->
+  <rect x="512" y="122" width="128" height="14" fill="#dc3a1c" />
+  <!-- Official Extreme: 642..720 -->
+  <rect x="642" y="122" width="78" height="14" fill="#9e1650" />
+  <!-- Clear: 722..820 -->
+  <rect x="722" y="122" width="98" height="14" fill="#2f9e5b" />
+  <!-- Unchecked (grey): 822..918 -->
+  <rect x="822" y="122" width="96" height="14" fill="#66726b" />
+
+  <!-- Band annotations -->
+  <text class="meta" x="141" y="152" text-anchor="middle">Mi 0–32 · Clear</text>
+  <text class="meta" x="316" y="152" text-anchor="middle">Mi 32–54 · Est. Snow (Hatched)</text>
+  <text class="meta" x="576" y="152" text-anchor="middle">Mi 72–90 · Wildfire ≤ 1 mi</text>
+  <text class="meta" x="681" y="152" text-anchor="middle">Crosses Fire</text>
+  <text class="meta" x="870" y="152" text-anchor="middle">Unrated Avy Zone (Grey)</text>
+
+  <!-- Bottom Row: Severity Scale & Line Style Key -->
+  <text class="tag" x="24" y="194">SEVERITY SCALE (SHARED BY MAP, PROFILE &amp; VERDICT)</text>
+  <text class="tag" x="616" y="194">SOURCE CONFIDENCE</text>
+
+  <!-- Swatches -->
+  <rect x="24" y="206" width="84" height="24" rx="3" fill="#2f9e5b" />
+  <text x="66" y="222" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1d2622">Clear (0)</text>
+
+  <rect x="116" y="206" width="84" height="24" rx="3" fill="#d9a400" />
+  <text x="158" y="222" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1d2622">Low (1)</text>
+
+  <rect x="208" y="206" width="96" height="24" rx="3" fill="#ee7a14" />
+  <text x="256" y="222" text-anchor="middle" font-size="11.5" font-weight="700" fill="#1d2622">Moderate (2)</text>
+
+  <rect x="312" y="206" width="84" height="24" rx="3" fill="#dc3a1c" />
+  <text x="354" y="222" text-anchor="middle" font-size="11.5" font-weight="700" fill="#ffffff">High (3)</text>
+
+  <rect x="404" y="206" width="92" height="24" rx="3" fill="#9e1650" />
+  <text x="450" y="222" text-anchor="middle" font-size="11.5" font-weight="700" fill="#ffffff">Extreme (4)</text>
+
+  <rect x="504" y="206" width="92" height="24" rx="3" fill="#66726b" />
+  <text x="550" y="222" text-anchor="middle" font-size="11.5" font-weight="700" fill="#ffffff">Unchecked</text>
+
+  <text class="meta" x="24" y="247">Missing or unrated data always renders in neutral grey (Unchecked) — never green.</text>
+
+  <!-- Right column: Solid vs Dashed -->
+  <line x1="616" y1="215" x2="660" y2="215" stroke="#dc3a1c" stroke-width="5" stroke-linecap="round" />
+  <text class="h2" x="670" y="219">Solid line / band</text>
+  <text class="body" x="778" y="219">— Official agency report (Levels 1–4)</text>
+
+  <line x1="616" y1="239" x2="660" y2="239" stroke="#ee7a14" stroke-width="5" stroke-dasharray="7 5" />
+  <text class="h2" x="670" y="243">Dashed / hatched</text>
+  <text class="body" x="778" y="243">— Modeled estimate (Capped ≤ Level 2)</text>
+</svg>

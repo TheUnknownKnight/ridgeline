@@ -49,7 +49,7 @@ export const sunHour = (hourStartMs, lat, lon, elevationM = 0) => {
   const a = s.azimuth * DEG;
   const pressure = Math.pow(Math.max(0.3, (293 - 0.0065 * elevationM) / 293), 5.26);
   const dni = (SOLAR_CONSTANT / (s.R * s.R)) * Math.pow(TRANSMISSIVITY, pressure / Math.cos(Z));
-  return { x: Math.sin(Z) * Math.sin(a), y: Math.sin(Z) * Math.cos(a), z: Math.cos(Z), dni, altitude: s.altitude };
+  return { x: Math.sin(Z) * Math.sin(a), y: Math.sin(Z) * Math.cos(a), z: Math.cos(Z), dni, altitude: s.altitude, azimuth: s.azimuth };
 };
 
 /** Unit normal of a slope (aspect = the direction it faces, clockwise from north). */
@@ -65,4 +65,57 @@ export const beamOnSlope = (sun, normal) => {
   if (!sun) return 0;
   const c = normal.x * sun.x + normal.y * sun.y + normal.z * sun.z;
   return c > 0 ? sun.dni * c : 0;
+};
+
+/** Smoothly interpolate an N-sector horizon elevation array (sector 0 = North, clockwise). */
+export const horizonAngleAt = (horizonDeg, azimuthDeg) => {
+  if (!Array.isArray(horizonDeg) || !horizonDeg.length) return 0;
+  const n = horizonDeg.length;
+  const az = ((azimuthDeg % 360) + 360) % 360;
+  const pos = (az / 360) * n;
+  const i0 = Math.floor(pos) % n;
+  const i1 = (i0 + 1) % n;
+  const f = pos - Math.floor(pos);
+  const a = Number.isFinite(horizonDeg[i0]) ? horizonDeg[i0] : 0;
+  const b = Number.isFinite(horizonDeg[i1]) ? horizonDeg[i1] : 0;
+  return a + (b - a) * f;
+};
+
+/**
+ * Total shortwave irradiance (W/m²) reaching a slope under cloud, canopy, and
+ * optional surrounding-ridge horizon blocking: direct beam + sky-view diffuse
+ * + terrain-reflected light.
+ */
+export const irradianceOnSlope = (sun, normal, {
+  cloud = 0, canopy = 0, slopeDeg = 0, horizonDeg = null, groundAlbedo = 0.2,
+} = {}) => {
+  if (!sun) return { beam: 0, diffuse: 0, total: 0, flat: 0, blocked: false };
+  const c = Math.min(1, Math.max(0, cloud / 100));
+  const f = Math.min(1, Math.max(0, canopy || 0));
+  const tauC = 1 - 0.8 * f;
+  const tauD = 1 - 0.65 * f;
+  const svf = slopeDeg > 0 ? (1 + Math.cos(slopeDeg * DEG)) / 2 : 1;
+
+  const az = sun.azimuth ?? (((Math.atan2(sun.x, sun.y) / DEG) % 360) + 360) % 360;
+  const blocked = Array.isArray(horizonDeg) && sun.altitude <= horizonAngleAt(horizonDeg, az);
+  const rawBeam = blocked ? 0 : beamOnSlope(sun, normal);
+
+  const ghiClear = Math.max(0, sun.dni * sun.z);
+  const totalCloud = 1 - 0.75 * Math.pow(c, 3.4);
+  const directCloud = Math.max(0, 1 - Math.pow(c, 1.5)) * totalCloud;
+  const directSlope = rawBeam * directCloud * tauC;
+
+  // Under overcast, direct beam collapses and global light becomes isotropic sky diffuse.
+  const diffuseH = Math.max(0.14 * totalCloud, totalCloud - directCloud) * ghiClear;
+  const diffuseSlope = diffuseH * svf * tauD;
+  const reflectedSlope = (1 - svf) * groundAlbedo * (ghiClear * totalCloud) * tauD;
+  const flat = ghiClear * totalCloud;
+
+  return {
+    beam: rawBeam,
+    diffuse: diffuseSlope + reflectedSlope,
+    total: directSlope + diffuseSlope + reflectedSlope,
+    flat,
+    blocked,
+  };
 };

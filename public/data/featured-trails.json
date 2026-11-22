@@ -1,0 +1,154 @@
+{
+  "version": 1,
+  "updatedAt": "2026-11-22T00:00:00Z",
+  "trails": [
+    {
+      "id": "featured:jmt-yosemite",
+      "name": "John Muir Trail (Yosemite to Mt. Whitney)",
+      "region": "Sierra Nevada, CA",
+      "agency": "NPS / USFS",
+      "lengthMiles": 202.2,
+      "gainFt": 46000,
+      "source": "sample",
+      "featured": true,
+      "start": [-119.557779, 37.732821],
+      "sampleUrl": "/samples/jmt-yosemite.gpx"
+    },
+    {
+      "id": "nps:GRCA:bright-angel",
+      "name": "Bright Angel Trail",
+      "region": "Grand Canyon National Park, AZ",
+      "agency": "NPS",
+      "lengthMiles": 7.9,
+      "gainFt": 4380,
+      "source": "nps",
+      "featured": true,
+      "start": [-112.14371, 36.057263],
+      "queryMeta": {
+        "source": "nps",
+        "trailNo": null,
+        "name": "Bright Angel",
+        "unit": "GRCA"
+      }
+    },
+    {
+      "id": "nps:YOSE:half-dome-trail",
+      "name": "Half Dome Trail",
+      "region": "Yosemite National Park, CA",
+      "agency": "NPS",
+      "lengthMiles": 2.0,
+      "gainFt": 1900,
+      "source": "nps",
+      "featured": true,
+      "start": [-119.512732, 37.745069],
+      "queryMeta": {
+        "source": "nps",
+        "trailNo": null,
+        "name": "Half Dome Trail",
+        "unit": "YOSE"
+      }
+    },
+    {
+      "id": "nps:ZION:angels-landing-trail",
+      "name": "Angels Landing Trail",
+      "region": "Zion National Park, UT",
+      "agency": "NPS",
+      "lengthMiles": 0.5,
+      "gainFt": 500,
+      "source": "nps",
+      "featured": true,
+      "start": [-112.95078, 37.274972],
+      "queryMeta": {
+        "source": "nps",
+        "trailNo": null,
+        "name": "Angels Landing Trail",
+        "unit": "ZION"
+      }
+    },
+    {
+      "id": "nps:MORA:wonderland-trail",
+      "name": "Wonderland Trail",
+      "region": "Mount Rainier National Park, WA",
+      "agency": "NPS",
+      "lengthMiles": 48.6,
+      "gainFt": 11200,
+      "source": "nps",
+      "featured": true,
+      "start": [-121.606371, 46.776415],
+      "queryMeta": {
+        "source": "nps",
+        "trailNo": null,
+        "name": "Wonderland Trail",
+        "unit": "MORA"
+      }
+    },
+    {
+      "id": "nps:NOCA:cascade-pass-trail",
+      "name": "Cascade Pass Trail",
+      "region": "North Cascades National Park, WA",
+      "agency": "NPS",
+      "lengthMiles": 8.7,
+      "gainFt": 3800,
+      "source": "nps",
+      "featured": true,
+      "start": [-121.07501, 48.475533],
+      "queryMeta": {
+        "source": "nps",
+        "trailNo": null,
+        "name": "Cascade Pass Trail",
+        "unit": "NOCA"
+      }
+    },
+    {
+      "id": "nps:GLAC:highline",
+      "name": "Highline Trail",
+      "region": "Glacier National Park, MT",
+      "agency": "NPS",
+      "lengthMiles": 19.2,
+      "gainFt": 2600,
+      "source": "nps",
+      "featured": true,
+      "start": [-113.718141, 48.696656],
+      "queryMeta": {
+        "source": "nps",
+        "trailNo": null,
+        "name": "Highline",
+        "unit": "GLAC"
+      }
+    },
+    {
+      "id": "usfs:0606:600:timberline",
+      "name": "Timberline Trail",
+      "region": "Mt. Hood National Forest, OR",
+      "agency": "USFS",
+      "lengthMiles": 29.1,
+      "gainFt": 8500,
+      "source": "usfs",
+      "featured": true,
+      "start": [-121.784177, 45.37989],
+      "queryMeta": {
+        "source": "usfs",
+        "trailNo": "600",
+        "name": "TIMBERLINE",
+        "unit": "0606"
+      }
+    },
+    {
+      "id": "nps:ACAD:beehive-trail",
+      "name": "Beehive Trail",
+      "region": "Acadia National Park, ME",
+      "agency": "NPS",
+      "lengthMiles": 0.8,
+      "gainFt": 450,
+      "source": "nps",
+      "featured": true,
+      "start": [-68.187592, 44.331647],
+      "queryMeta": {
+        "source": "nps",
+        "trailNo": null,
+        "name": "Beehive Trail",
+        "unit": "ACAD"
+      }
+    }
+  ]
+}
