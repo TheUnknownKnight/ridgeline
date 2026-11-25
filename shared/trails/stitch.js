@@ -108,29 +108,7 @@ export const extractLineSegments = (features) => {
   return segments;
 };
 
-/**
- * Stitch an unordered array of polyline segments belonging to one named trail
- * into a single continuous track.
- *
- * - Strips invalid/duplicate coordinates.
- * - Greedily chains segments endpoint-to-endpoint (both ends of the active
- *   chain, reversing segments when needed) while the endpoint gap is within
- *   `maxGapMiles`.
- * - If disconnected components remain (separate trails sharing a name, or
- *   disconnected spurs), returns ONLY the longest continuous component so no
- *   bogus straight teleport line is ever drawn across miles of terrain.
- * - Simplifies slightly if the stitched line exceeds `maxVertices` (default 2500).
- *
- * Returns `{ coords, lengthMiles, segmentsUsed, totalSegments, start, end }`
- * or `null` when the longest continuous component is shorter than
- * `minLengthMiles` or has fewer than 2 points.
- */
-export const stitchSegments = (
-  segments,
-  { maxGapMiles = 0.35, minLengthMiles = 0.25, maxVertices = DEFAULT_MAX_VERTICES } = {},
-) => {
-  if (!Array.isArray(segments) || segments.length === 0) return null;
-
+const chainComponents = (segments, maxGapMiles) => {
   const cleaned = [];
   for (const seg of segments) {
     const coords = cleanPolyline(seg);
@@ -141,7 +119,7 @@ export const stitchSegments = (
   }
 
   const totalSegments = cleaned.length;
-  if (totalSegments === 0) return null;
+  if (totalSegments === 0) return { components: [], totalSegments: 0 };
 
   // Deduplicate exact overlapping GIS rows so we never double-back over the same line.
   const unique = [];
@@ -153,7 +131,7 @@ export const stitchSegments = (
 
   const used = new Uint8Array(unique.length);
   let remaining = unique.length;
-  let bestComponent = null;
+  const components = [];
 
   while (remaining > 0) {
     // Seed each component with the longest unused segment so we start on the trunk.
@@ -217,15 +195,14 @@ export const stitchSegments = (
       }
     }
 
-    const lengthMiles = polylineLength(chain);
-    if (!bestComponent || lengthMiles > bestComponent.lengthMiles) {
-      bestComponent = { coords: chain, lengthMiles, segmentsUsed };
-    }
+    components.push({ coords: chain, lengthMiles: polylineLength(chain), segmentsUsed });
   }
 
-  if (!bestComponent) return null;
+  return { components, totalSegments };
+};
 
-  let coords = stripPlaceholderElevation(cleanPolyline(bestComponent.coords));
+const finalizeStitchedCoords = (rawCoords, maxVertices, minLengthMiles) => {
+  let coords = stripPlaceholderElevation(cleanPolyline(rawCoords));
   if (coords.length > maxVertices) {
     let tol = 0.002; // ~3.2 m starting Douglas-Peucker tolerance
     let simplified = coords;
@@ -239,13 +216,123 @@ export const stitchSegments = (
   if (coords.length < 2) return null;
   const lengthMiles = polylineLength(coords);
   if (lengthMiles < minLengthMiles) return null;
+  return { coords, lengthMiles };
+};
+
+/**
+ * Stitch an unordered array of polyline segments belonging to one named trail
+ * into a single continuous track.
+ *
+ * - Strips invalid/duplicate coordinates.
+ * - Greedily chains segments endpoint-to-endpoint (both ends of the active
+ *   chain, reversing segments when needed) while the endpoint gap is within
+ *   `maxGapMiles`.
+ * - If disconnected components remain (separate trails sharing a name, or
+ *   disconnected spurs), returns ONLY the longest continuous component so no
+ *   bogus straight teleport line is ever drawn across miles of terrain.
+ * - Simplifies slightly if the stitched line exceeds `maxVertices` (default 2500).
+ *
+ * Returns `{ coords, lengthMiles, segmentsUsed, totalSegments, start, end }`
+ * or `null` when the longest continuous component is shorter than
+ * `minLengthMiles` or has fewer than 2 points.
+ */
+export const stitchSegments = (
+  segments,
+  { maxGapMiles = 0.35, minLengthMiles = 0.25, maxVertices = DEFAULT_MAX_VERTICES } = {},
+) => {
+  if (!Array.isArray(segments) || segments.length === 0) return null;
+
+  const { components, totalSegments } = chainComponents(segments, maxGapMiles);
+  if (!components.length) return null;
+
+  let bestComponent = components[0];
+  for (let i = 1; i < components.length; i++) {
+    if (components[i].lengthMiles > bestComponent.lengthMiles) {
+      bestComponent = components[i];
+    }
+  }
+
+  const finalized = finalizeStitchedCoords(bestComponent.coords, maxVertices, minLengthMiles);
+  if (!finalized) return null;
 
   return {
-    coords,
-    lengthMiles,
+    coords: finalized.coords,
+    lengthMiles: finalized.lengthMiles,
     segmentsUsed: bestComponent.segmentsUsed,
     totalSegments,
-    start: coords[0],
-    end: coords[coords.length - 1],
+    start: finalized.coords[0],
+    end: finalized.coords[finalized.coords.length - 1],
+  };
+};
+
+const shouldReverseForAxis = (coords, direction) => {
+  const first = coords[0];
+  const last = coords[coords.length - 1];
+  switch (direction) {
+    case 'north-to-south': return first[1] < last[1];
+    case 'west-to-east':   return first[0] > last[0];
+    case 'east-to-west':   return first[0] < last[0];
+    case 'south-to-north':
+    default:               return first[1] > last[1];
+  }
+};
+
+const axisMidpoint = (coords, direction) => {
+  const first = coords[0];
+  const last = coords[coords.length - 1];
+  const isLon = direction === 'west-to-east' || direction === 'east-to-west';
+  return isLon ? (first[0] + last[0]) / 2 : (first[1] + last[1]) / 2;
+};
+
+const axisSign = (direction) =>
+  direction === 'north-to-south' || direction === 'east-to-west' ? -1 : 1;
+
+/**
+ * Assemble a long multi-agency corridor (e.g. PCT spanning dozens of National Forests
+ * and Parks) from unordered GeoJSON segments without dropping disconnected forests.
+ */
+export const stitchCorridorSegments = (
+  segments,
+  { direction = 'south-to-north', maxGapMiles = 0.5, minComponentMiles = 0.5, maxVertices = DEFAULT_MAX_VERTICES } = {},
+) => {
+  if (!Array.isArray(segments) || segments.length === 0) return null;
+
+  const { components, totalSegments } = chainComponents(segments, maxGapMiles);
+  if (!components.length) return null;
+
+  const substantial = components.filter((c) => c.lengthMiles >= minComponentMiles);
+  const chosen = substantial.length ? substantial : components;
+
+  const sign = axisSign(direction);
+  for (const comp of chosen) {
+    if (shouldReverseForAxis(comp.coords, direction)) {
+      comp.coords = comp.coords.slice().reverse();
+    }
+    comp.mid = axisMidpoint(comp.coords, direction);
+  }
+  chosen.sort((a, b) => (a.mid - b.mid) * sign);
+
+  const combined = [];
+  let segmentsUsed = 0;
+  for (const comp of chosen) {
+    segmentsUsed += comp.segmentsUsed;
+    for (const pt of comp.coords) {
+      const prev = combined[combined.length - 1];
+      if (prev && prev[0] === pt[0] && prev[1] === pt[1]) continue;
+      combined.push(pt);
+    }
+  }
+
+  const finalized = finalizeStitchedCoords(combined, maxVertices, 0.25);
+  if (!finalized) return null;
+
+  return {
+    coords: finalized.coords,
+    lengthMiles: finalized.lengthMiles,
+    segmentsUsed,
+    totalSegments,
+    componentCount: chosen.length,
+    start: finalized.coords[0],
+    end: finalized.coords[finalized.coords.length - 1],
   };
 };

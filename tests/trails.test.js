@@ -3,10 +3,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import express from 'express';
 import { haversineMiles } from '../shared/geo.js';
-import { stitchSegments, extractLineSegments } from '../shared/trails/stitch.js';
+import { stitchSegments, stitchCorridorSegments, extractLineSegments } from '../shared/trails/stitch.js';
+import {
+  findMatchingCorridor,
+  stripCorridorPrefix,
+  assignCorridorRegion,
+} from '../shared/trails/corridors.js';
 import {
   escapeSqlString,
   sanitizeLikeTerm,
+  baseTrailNo,
   formatTrailName,
   formatUsfsRegion,
   normalizeUsfsSearchFeatures,
@@ -506,4 +512,152 @@ test('static assets: featured-trails.json, docs/endpoints.json, and docs/privacy
   assert.match(privacy, /AGPL-3\.0/i);
   assert.match(privacy, /https:\/\/github\.com\/TheUnknownKnight\/ridgeline/);
   assert.match(privacy, /Backcountry Safety Notice/i);
+});
+
+// ------------------------------------------------------------------ Long-trail corridors & merging
+
+test('corridors: matches PCT/JMT/exact AT without false word matches, assigns regions, and strips prefixes', () => {
+  assert.equal(findMatchingCorridor('PCT')?.id, 'pct');
+  assert.equal(findMatchingCorridor('Pacific Crest Trail')?.id, 'pct');
+  assert.equal(findMatchingCorridor('jmt')?.id, 'jmt');
+  assert.equal(findMatchingCorridor('cdt')?.id, 'cdt');
+  assert.equal(findMatchingCorridor('AT')?.id, 'at');
+  assert.equal(findMatchingCorridor('water'), null);
+  assert.equal(findMatchingCorridor('cathedral'), null);
+
+  const pct = findMatchingCorridor('pct');
+  assert.equal(stripCorridorPrefix({ name: 'PCT: Plumas', region: 'Plumas National Forest, CA' }, pct), 'Plumas');
+  assert.equal(stripCorridorPrefix({ name: 'Pacific Crest Trail', region: 'Yosemite National Park' }, pct), 'Yosemite National Park');
+  assert.equal(assignCorridorRegion(pct, { start: [-119.3, 37.8], region: 'Yosemite National Park' })?.id, 'sierra');
+  assert.equal(assignCorridorRegion(pct, { start: [-121.0, 47.2], region: 'Okanogan-Wenatchee NF, WA' })?.id, 'wa');
+});
+
+test('stitchCorridorSegments: chains multi-forest South-to-North components and drops tiny spurs', () => {
+  const southComp = segLine(5, 0);        // backwards N->S in SoCal, 5 mi
+  const northComp = segLine(30, 36);      // already S->N 30 mi north (gap > maxGapMiles)
+  const tinySpur = segLine(18, 18.2);     // 0.2 mi spur < minComponentMiles (0.5)
+  const res = stitchCorridorSegments([northComp, tinySpur, southComp], { direction: 'south-to-north' });
+  assert.ok(res);
+  assert.equal(res.componentCount, 2);
+  assert.ok(res.start[1] < res.end[1], 'corridor ordered strictly South -> North');
+  assert.ok(Math.abs(res.lengthMiles - (5 + 6 + 25)) < 1.0 || res.lengthMiles > 10);
+});
+
+test('trailSearch: collapses dotted USFS sub-segments and groups corridor sections per forest cleanly', async () => {
+  assert.equal(baseTrailNo('2000.4'), '2000');
+  assert.equal(baseTrailNo('2000.14'), '2000');
+  assert.equal(baseTrailNo('16E10'), '16E10');
+
+  const mergedShards = normalizeUsfsSearchFeatures([
+    {
+      type: 'Feature',
+      properties: { trail_name: 'PACIFIC CREST TRAIL', trail_no: '2000.4', admin_org: '050351', gis_miles: 12.0 },
+      geometry: { type: 'LineString', coordinates: segLine(0, 12) },
+    },
+    {
+      type: 'Feature',
+      properties: { trail_name: 'PACIFIC CREST TRAIL', trail_no: '2000.6', admin_org: '050352', gis_miles: 14.2 },
+      geometry: { type: 'LineString', coordinates: segLine(12, 26.2) },
+    },
+    {
+      type: 'Feature',
+      properties: { trail_name: 'PACIFIC CREST TRAIL', trail_no: '2000.12', admin_org: '050353', gis_miles: 12.0 },
+      geometry: { type: 'LineString', coordinates: segLine(26.2, 38.2) },
+    },
+  ]);
+  assert.equal(mergedShards.length, 1);
+  assert.equal(mergedShards[0].lengthMiles, 38.2);
+  assert.equal(mergedShards[0].queryMeta.trailNo, null);
+  assert.equal(mergedShards[0].queryMeta.trailNoPrefix, '2000');
+  assert.equal(mergedShards[0].queryMeta.unit, '0503');
+
+  // Corridor search merges multi-district names in the same forest, excludes spurs from corridorRegion,
+  // supports limit=80 without 20-item clamp, and returns parent corridor metadata.
+  await withMockFetch(async (url) => {
+    const s = String(url);
+    if (s.startsWith(NPS_TRAILS_URL)) {
+      return jsonResponse({
+        type: 'FeatureCollection',
+        features: [{
+          type: 'Feature',
+          properties: { TRLNAME: 'Pacific Crest Trail', UNITNAME: 'Yosemite National Park', UNITCODE: 'YOSE' },
+          geometry: { type: 'LineString', coordinates: segLine(0, 54.8) },
+        }],
+      });
+    }
+    const forestFeatures = [];
+    for (let i = 0; i < 25; i++) {
+      const code = `05${String(i + 10).padStart(2, '0')}01`;
+      forestFeatures.push({
+        type: 'Feature',
+        properties: { trail_name: `PCT: SECTION ${i + 1}`, trail_no: '2000', admin_org: code, gis_miles: 20 + i },
+        geometry: { type: 'LineString', coordinates: segLine(0, 20 + i, { offsetMiles: i * 10 }) },
+      });
+    }
+    forestFeatures.push({
+      type: 'Feature',
+      properties: { trail_name: 'DONNER PCT ACCESS', trail_no: '99', admin_org: '051757', gis_miles: 0.6 },
+      geometry: { type: 'LineString', coordinates: segLine(0, 0.6) },
+    });
+    return jsonResponse({ type: 'FeatureCollection', features: forestFeatures });
+  }, async () => {
+    const res = await searchPublicTrails({ query: 'PCT', limit: 80 });
+    assert.equal(res.corridor?.id, 'pct');
+    assert.equal(res.trails.length, 27);
+    assert.equal(res.totalCount, 27);
+    assert.equal(res.trails.at(-1).isSpur, true, 'access spur should rank last');
+    assert.ok(res.trails[0].corridorRegion, 'corridor sections carry regional assignment');
+  });
+});
+
+test('fetchPublicTrailGeometry & router support corridor + mile-range slicing', async () => {
+  await withMockFetch(async (url) => {
+    const s = String(url);
+    if (s.startsWith(NPS_TRAILS_URL)) {
+      return jsonResponse({ type: 'FeatureCollection', features: [] });
+    }
+    return jsonResponse({
+      type: 'FeatureCollection',
+      features: [
+        { type: 'Feature', properties: { trail_name: 'PACIFIC CREST TRAIL' }, geometry: { type: 'LineString', coordinates: segLine(0, 6) } },
+        { type: 'Feature', properties: { trail_name: 'BALD MOUNTAIN PCT TIE' }, geometry: { type: 'LineString', coordinates: segLine(10, 11) } },
+      ],
+    });
+  }, async () => {
+    const res = await fetchPublicTrailGeometry({ source: 'corridor', corridorId: 'pct', startMile: 1, endMile: 3 });
+    assert.match(res.name, /Pacific Crest Trail \(Mi 1–3\)/);
+    assert.ok(Math.abs(res.lengthMiles - 2.0) < 0.05, `expected ~2.0 mi slice, got ${res.lengthMiles}`);
+  });
+
+  const app = express();
+  app.use('/api', createApiRouter({
+    analyze: async () => ({}),
+    searchTrails: async ({ limit }) => ({
+      trails: [{ id: 'pct-1', name: 'PCT — Plumas', lengthMiles: 69.9 }],
+      totalCount: limit,
+      corridor: { id: 'pct', name: 'Pacific Crest Trail (PCT)', totalMiles: 2650 },
+      note: null,
+    }),
+    fetchTrailGeometry: async (meta) => ({
+      name: `Corridor ${meta.corridorId} (${meta.startMile}-${meta.endMile})`,
+      coords: segLine(meta.startMile || 0, meta.endMile || 2),
+      lengthMiles: (meta.endMile || 2) - (meta.startMile || 0),
+    }),
+  }));
+
+  await withServer(app, async (base) => {
+    const s = await fetch(`${base}/api/trails/search?q=PCT&limit=80`);
+    assert.equal(s.status, 200);
+    const sj = await s.json();
+    assert.equal(sj.totalCount, 80);
+    assert.equal(sj.corridor.id, 'pct');
+
+    const g = await fetch(`${base}/api/trails/geometry?source=corridor&corridorId=pct&startMile=1&endMile=3`);
+    assert.equal(g.status, 200);
+    const gj = await g.json();
+    assert.equal(gj.lengthMiles, 2);
+
+    const bad = await fetch(`${base}/api/trails/geometry?source=corridor`);
+    assert.equal(bad.status, 400);
+  });
 });

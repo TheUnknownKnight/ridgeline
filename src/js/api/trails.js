@@ -9,13 +9,18 @@
  *   Capacitor native, or via GET /api/trails/* in the browser).
  */
 import { parseRouteText } from '../gpx/importer.js';
-import { haversineMiles } from '../../../shared/geo.js';
+import { cumulativeMiles, haversineMiles, sliceByMiles } from '../../../shared/geo.js';
+import {
+  findMatchingCorridor,
+  serializeCorridor,
+  assignCorridorRegion,
+} from '../../../shared/trails/corridors.js';
 
 const FEATURED_URL = '/data/featured-trails.json';
 const SEARCH_ENDPOINT = '/api/trails/search';
 const GEOMETRY_ENDPOINT = '/api/trails/geometry';
 const DEFAULT_RADIUS_MILES = 25;
-const DEFAULT_LIMIT = 20;
+const DEFAULT_LIMIT = 80;
 
 let featuredCache = null;
 let featuredPromise = null;
@@ -36,6 +41,9 @@ const normalizeNameKey = (name) =>
     .trim();
 
 const trailDedupKey = (trail) => {
+  if (trail.queryMeta?.corridorId && trail.queryMeta?.unit) {
+    return `${String(trail.queryMeta.source || '').toLowerCase()}|corridor:${trail.queryMeta.corridorId}|${String(trail.queryMeta.unit).toUpperCase()}`;
+  }
   if (trail.queryMeta?.source) {
     const src = String(trail.queryMeta.source).toLowerCase();
     const unit = String(trail.queryMeta.unit || '').toUpperCase();
@@ -85,15 +93,20 @@ const findSavedMatch = (trail, savedRoutes) => {
   return null;
 };
 
-const enrichWithSaved = (trail, savedRoutes) => {
+const enrichWithSaved = (trail, savedRoutes, activeCorridor = null) => {
   const match = findSavedMatch(trail, savedRoutes);
-  if (!match) return { ...trail };
-  return {
+  const enriched = {
     ...trail,
-    savedId: match.id,
-    offlineReady: Boolean(match.offlinePack),
-    level: match.lastCheck?.summary?.level ?? null,
+    ...(match ? {
+      savedId: match.id,
+      offlineReady: Boolean(match.offlinePack),
+      level: match.lastCheck?.summary?.level ?? null,
+    } : {}),
   };
+  if (activeCorridor && !enriched.corridorRegion && enriched.queryMeta?.corridorId === activeCorridor.id) {
+    enriched.corridorRegion = assignCorridorRegion(activeCorridor, enriched);
+  }
+  return enriched;
 };
 
 const mapSavedRoute = (r) => ({
@@ -113,9 +126,12 @@ const mapSavedRoute = (r) => ({
   ...(r.meta?.queryMeta ? { queryMeta: r.meta.queryMeta } : {}),
 });
 
-const matchesQuery = (trail, query) => {
+const matchesQuery = (trail, query, corridor = null) => {
   const q = String(query || '').trim().toLowerCase();
   if (!q) return true;
+  if (corridor && normalizeNameKey(trail.name).includes(corridor.name.split(' (')[0].toLowerCase())) {
+    return true;
+  }
   const hay = `${trail.name || ''} ${trail.region || ''} ${trail.agency || ''}`.toLowerCase();
   const tokens = q.split(/\s+/).filter(Boolean);
   return tokens.every((tok) => hay.includes(tok));
@@ -160,6 +176,8 @@ const fetchLiveSearch = async ({ query, loc, radiusMiles = DEFAULT_RADIUS_MILES,
   }
   return {
     trails: Array.isArray(body?.trails) ? body.trails : [],
+    totalCount: Number.isFinite(body?.totalCount) ? body.totalCount : null,
+    corridor: body?.corridor || null,
     note: typeof body?.note === 'string' ? body.note : null,
   };
 };
@@ -167,8 +185,7 @@ const fetchLiveSearch = async ({ query, loc, radiusMiles = DEFAULT_RADIUS_MILES,
 /**
  * Search featured, saved, and live public USFS/NPS trails.
  *
- * Returns `{ trails, note }` where each trail has:
- * `{ id, name, region, agency, lengthMiles, gainFt, source, featured?, savedId?, offlineReady?, level?, start?, sampleUrl?, queryMeta? }`
+ * Returns `{ trails, totalCount, corridor, note }`.
  */
 export const searchTrails = async ({
   query = '',
@@ -184,25 +201,26 @@ export const searchTrails = async ({
     const trails = (savedRoutes || [])
       .map(mapSavedRoute)
       .filter((t) => matchesQuery(t, q));
-    return { trails, note: null };
+    return { trails, totalCount: trails.length, corridor: null, note: null };
   }
 
   const featured = await loadFeaturedTrails(signal);
+  const localCorridor = filter !== 'near' ? findMatchingCorridor(q) : null;
 
   const shouldQueryLive = q.length >= 2 || (filter === 'near' && Boolean(loc));
 
   if (!shouldQueryLive) {
     if (filter === 'near' && !loc) {
-      return { trails: [], note: 'Allow location access to find trails near you.' };
+      return { trails: [], totalCount: 0, corridor: null, note: 'Allow location access to find trails near you.' };
     }
     const trails = featured
       .filter((t) => matchesQuery(t, q))
       .map((t) => enrichWithSaved(t, savedRoutes));
-    return { trails, note: null };
+    return { trails, totalCount: trails.length, corridor: null, note: null };
   }
 
   const featuredMatches = featured.filter((t) => {
-    if (q.length >= 2) return matchesQuery(t, q);
+    if (q.length >= 2) return matchesQuery(t, q, localCorridor);
     if (loc && Array.isArray(t.start)) {
       return haversineMiles(loc.lon, loc.lat, t.start[0], t.start[1]) <= DEFAULT_RADIUS_MILES;
     }
@@ -210,6 +228,8 @@ export const searchTrails = async ({
   });
 
   let liveTrails = [];
+  let totalCount = null;
+  let corridor = serializeCorridor(localCorridor);
   let note = null;
 
   try {
@@ -219,6 +239,8 @@ export const searchTrails = async ({
       signal,
     });
     liveTrails = live.trails || [];
+    totalCount = live.totalCount;
+    if (live.corridor) corridor = live.corridor;
     note = live.note || null;
   } catch (err) {
     if (signal?.aborted || err?.name === 'AbortError') throw err;
@@ -235,14 +257,14 @@ export const searchTrails = async ({
     const key = trailDedupKey(t);
     if (seen.has(key)) continue;
     seen.add(key);
-    merged.push(enrichWithSaved(t, savedRoutes));
+    merged.push(enrichWithSaved(t, savedRoutes, corridor));
   }
 
   for (const t of liveTrails) {
     const key = trailDedupKey(t);
     if (seen.has(key)) continue;
     seen.add(key);
-    merged.push(enrichWithSaved(t, savedRoutes));
+    merged.push(enrichWithSaved(t, savedRoutes, corridor));
   }
 
   if (filter === 'near' && loc && q.length < 2) {
@@ -253,20 +275,26 @@ export const searchTrails = async ({
     });
   }
 
-  return { trails: merged, note };
+  return {
+    trails: merged,
+    totalCount: Math.max(merged.length, totalCount || 0),
+    corridor: filter === 'near' ? null : corridor,
+    note,
+  };
 };
 
 /**
- * Fetch the full track coordinates for a trail returned by `searchTrails`.
- * Supports bundled GPX sample routes (`trail.sampleUrl`) and live stitched
- * USFS/NPS geometries (`trail.queryMeta`).
+ * Fetch the full (or mile-sliced) track coordinates for a trail returned by `searchTrails`,
+ * or a corridor object (`{ sampleUrl }` or `{ queryMeta: { source: 'corridor', corridorId } }`).
  *
  * Returns `{ name, coords }` (plus `lengthMiles` when available).
  */
-export const fetchTrailTrack = async (trail, { signal } = {}) => {
+export const fetchTrailTrack = async (trail, { startMile = null, endMile = null, signal } = {}) => {
   if (!trail || typeof trail !== 'object') {
     throw new Error('Select a trail to load its track.');
   }
+
+  const hasSlice = startMile != null || endMile != null;
 
   if (trail.sampleUrl) {
     const res = await fetch(trail.sampleUrl, { signal });
@@ -275,6 +303,20 @@ export const fetchTrailTrack = async (trail, { signal } = {}) => {
     }
     const text = await res.text();
     const parsed = parseRouteText(text, fileBaseName(trail.sampleUrl) || 'trail.gpx');
+    if (hasSlice && Array.isArray(parsed.coords) && parsed.coords.length >= 2) {
+      const cum = cumulativeMiles(parsed.coords);
+      const total = cum[cum.length - 1];
+      const a = Math.max(0, Math.min(Number(startMile ?? 0), Math.max(0, total - 0.3)));
+      const b = Math.max(a + 0.3, Math.min(Number(endMile ?? total), total));
+      const coords = sliceByMiles(parsed.coords, cum, a, b);
+      const sCum = cumulativeMiles(coords);
+      const baseName = String(trail.name || parsed.name || 'Route').replace(/\s*\([A-Z]+\)$/, '');
+      return {
+        name: `${baseName} (Mi ${Math.round(a)}–${Math.round(b)})`,
+        coords,
+        lengthMiles: Math.round(sCum[sCum.length - 1] * 100) / 100,
+      };
+    }
     return {
       name: trail.name || parsed.name,
       coords: parsed.coords,
@@ -282,20 +324,29 @@ export const fetchTrailTrack = async (trail, { signal } = {}) => {
   }
 
   if (trail.queryMeta) {
+    const meta = {
+      ...trail.queryMeta,
+      ...(hasSlice ? { startMile, endMile } : {}),
+    };
+
     if (isNativePlatform()) {
       const { fetchPublicTrailGeometry } = await loadNativeTrailModule();
-      const data = await fetchPublicTrailGeometry(trail.queryMeta);
+      const data = await fetchPublicTrailGeometry(meta);
       return {
-        name: trail.name || data.name,
+        name: hasSlice ? data.name : (trail.name || data.name),
         coords: data.coords,
         lengthMiles: data.lengthMiles,
       };
     }
 
-    const qs = new URLSearchParams({ source: trail.queryMeta.source });
-    if (trail.queryMeta.name) qs.set('name', trail.queryMeta.name);
-    if (trail.queryMeta.trailNo) qs.set('trailNo', trail.queryMeta.trailNo);
-    if (trail.queryMeta.unit) qs.set('unit', trail.queryMeta.unit);
+    const qs = new URLSearchParams({ source: meta.source });
+    if (meta.name) qs.set('name', meta.name);
+    if (meta.trailNo) qs.set('trailNo', meta.trailNo);
+    if (meta.trailNoPrefix) qs.set('trailNoPrefix', meta.trailNoPrefix);
+    if (meta.corridorId) qs.set('corridorId', meta.corridorId);
+    if (meta.unit) qs.set('unit', meta.unit);
+    if (startMile != null) qs.set('startMile', String(startMile));
+    if (endMile != null) qs.set('endMile', String(endMile));
 
     const res = await fetch(`${GEOMETRY_ENDPOINT}?${qs}`, { signal });
     const text = await res.text();
@@ -308,7 +359,7 @@ export const fetchTrailTrack = async (trail, { signal } = {}) => {
       throw new Error(`No usable track geometry was returned for "${trail.name || 'this trail'}".`);
     }
     return {
-      name: trail.name || body.name,
+      name: hasSlice ? body.name : (trail.name || body.name),
       coords: body.coords,
       lengthMiles: body.lengthMiles,
     };

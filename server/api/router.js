@@ -50,26 +50,41 @@ const parseTrailSearchQuery = (query) => {
   if (query.limit !== undefined && query.limit !== '') {
     const l = Number(query.limit);
     if (!Number.isFinite(l) || l < 1) throw new ValidationError('limit must be a positive number', 'invalid_query');
-    limit = Math.min(50, Math.max(1, Math.round(l)));
+    limit = Math.min(100, Math.max(1, Math.round(l)));
   }
 
   return { query: q, lat, lon, radiusMiles, limit };
 };
 
+const parseOptionalMile = (raw, field) => {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0 || n > 10000) {
+    throw new ValidationError(`${field} must be a valid non-negative mile number`, 'invalid_trail');
+  }
+  return n;
+};
+
 const parseTrailGeometryQuery = (query) => {
   const source = cleanQueryString(query.source, 16).toLowerCase();
-  if (source !== 'usfs' && source !== 'nps') {
-    throw new ValidationError('source must be "usfs" or "nps"', 'invalid_source');
+  if (source !== 'usfs' && source !== 'nps' && source !== 'corridor') {
+    throw new ValidationError('source must be "usfs", "nps", or "corridor"', 'invalid_source');
   }
   const name = cleanQueryString(query.name, 120);
   const trailNo = cleanQueryString(query.trailNo, 40) || null;
+  const trailNoPrefix = cleanQueryString(query.trailNoPrefix, 40) || null;
+  const corridorId = cleanQueryString(query.corridorId, 24).toLowerCase() || null;
   const unit = cleanQueryString(query.unit, 40) || null;
+  const startMile = parseOptionalMile(query.startMile, 'startMile');
+  const endMile = parseOptionalMile(query.endMile, 'endMile');
 
-  if (!name && !(source === 'usfs' && trailNo)) {
+  if (source === 'corridor') {
+    if (!corridorId) throw new ValidationError('Provide a corridorId for corridor geometry', 'invalid_trail');
+  } else if (!name && !(source === 'usfs' && (trailNo || trailNoPrefix || corridorId))) {
     throw new ValidationError('Provide a trail name (or trailNo for USFS)', 'invalid_trail');
   }
 
-  return { source, name, trailNo, unit };
+  return { source, name, trailNo, trailNoPrefix, corridorId, unit, startMile, endMile };
 };
 
 export const createApiRouter = ({
@@ -128,7 +143,12 @@ export const createApiRouter = ({
     try {
       const result = await searchTrails(params);
       res.set('Cache-Control', result.note ? 'no-store' : 'public, max-age=300');
-      res.json({ trails: result.trails, note: result.note ?? null });
+      res.json({
+        trails: result.trails,
+        totalCount: result.totalCount ?? result.trails.length,
+        corridor: result.corridor ?? null,
+        note: result.note ?? null,
+      });
     } catch (err) {
       console.error(`[trails/search ${requestId}] failed:`, err);
       res.status(502).json({ error: 'Trail search failed. Please try again.', code: 'trail_search_failed', requestId });
