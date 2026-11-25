@@ -102,7 +102,7 @@ jobs:
 
   ios:
     needs: test-and-web
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -126,7 +126,7 @@ jobs:
   ios-release:
     needs: test-and-web
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -177,6 +177,7 @@ jobs:
         env:
           IOS_BUILD_NUMBER: ${{ inputs.ios_build_number || '1' }}
         run: |
+          xcodebuild -version
           xcodebuild archive \
             -project App.xcodeproj \
             -scheme App \
