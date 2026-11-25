@@ -11,6 +11,10 @@ on:
         description: 'Android versionCode (integer; increment for every Google Play upload)'
         required: false
         default: '1'
+      ios_build_number:
+        description: 'iOS CFBundleVersion build number (integer; increment for every TestFlight/App Store upload)'
+        required: false
+        default: '1'
 
 jobs:
   test-and-web:
@@ -118,3 +122,66 @@ jobs:
             -configuration Release \
             CODE_SIGNING_ALLOWED=NO \
             build
+
+  ios-release:
+    needs: test-and-web
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx cap sync ios
+      - name: Check App Store Connect API credentials
+        id: asc
+        env:
+          APP_STORE_CONNECT_API_KEY_P8_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8_BASE64 }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          if [ -n "$APP_STORE_CONNECT_API_KEY_P8_BASE64" ] && [ -n "$APP_STORE_CONNECT_KEY_ID" ] && [ -n "$APP_STORE_CONNECT_ISSUER_ID" ]; then
+            key_path="$RUNNER_TEMP/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
+            echo "$APP_STORE_CONNECT_API_KEY_P8_BASE64" | base64 -d > "$key_path"
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            echo "key_path=$key_path" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "Missing APP_STORE_CONNECT_API_KEY_P8_BASE64, APP_STORE_CONNECT_KEY_ID, or APP_STORE_CONNECT_ISSUER_ID; skipping App Store Connect upload."
+          fi
+      - name: Archive iOS app
+        if: steps.asc.outputs.configured == 'true'
+        working-directory: ios/App
+        env:
+          IOS_BUILD_NUMBER: ${{ inputs.ios_build_number || '1' }}
+        run: |
+          xcodebuild archive \
+            -project App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Ridgeline.xcarchive" \
+            CURRENT_PROJECT_VERSION="${IOS_BUILD_NUMBER}" \
+            CODE_SIGNING_ALLOWED=NO
+      - name: Cloud-sign and upload to App Store Connect
+        if: steps.asc.outputs.configured == 'true'
+        working-directory: ios/App
+        env:
+          ASC_KEY_PATH: ${{ steps.asc.outputs.key_path }}
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Ridgeline.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+      - name: Remove temporary API key
+        if: always()
+        run: rm -f "$RUNNER_TEMP"/AuthKey_*.p8
