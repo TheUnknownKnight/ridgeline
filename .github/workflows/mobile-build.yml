@@ -143,11 +143,30 @@ jobs:
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
         run: |
-          if [ -n "$APP_STORE_CONNECT_API_KEY_P8_BASE64" ] && [ -n "$APP_STORE_CONNECT_KEY_ID" ] && [ -n "$APP_STORE_CONNECT_ISSUER_ID" ]; then
-            key_path="$RUNNER_TEMP/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8"
-            echo "$APP_STORE_CONNECT_API_KEY_P8_BASE64" | base64 -d > "$key_path"
+          key_raw="$APP_STORE_CONNECT_API_KEY_P8_BASE64"
+          key_id="$(printf '%s' "$APP_STORE_CONNECT_KEY_ID" | tr -d '[:space:]')"
+          issuer_id="$(printf '%s' "$APP_STORE_CONNECT_ISSUER_ID" | tr -d '[:space:]')"
+          if [ -n "$key_raw" ] && [ -n "$key_id" ] && [ -n "$issuer_id" ]; then
+            key_path="$RUNNER_TEMP/asc_auth_key.p8"
+            KEY_PATH="$key_path" node - <<'EOF'
+          const fs = require('node:fs');
+          const raw = (process.env.APP_STORE_CONNECT_API_KEY_P8_BASE64 || '').trim();
+          let pemText = raw.includes('BEGIN PRIVATE KEY')
+            ? raw
+            : Buffer.from(raw.replace(/\s+/g, ''), 'base64').toString('utf8');
+          pemText = pemText.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+          if (pemText && !pemText.endsWith('\n')) pemText += '\n';
+          fs.writeFileSync(process.env.KEY_PATH, pemText, { mode: 0o600 });
+          const bytes = Buffer.byteLength(pemText, 'utf8');
+          const hasPemHeader = pemText.includes('-----BEGIN PRIVATE KEY-----');
+          const hasPemFooter = pemText.includes('-----END PRIVATE KEY-----');
+          console.log(`Decoded API key: ${bytes} bytes, hasPemHeader=${hasPemHeader}, hasPemFooter=${hasPemFooter}`);
+          EOF
+            if ! openssl pkey -in "$key_path" -noout >/dev/null 2>&1; then
+              echo "::error::APP_STORE_CONNECT_API_KEY_P8_BASE64 did not decode to a valid PKCS#8 .p8 private key. Re-save the secret using Base64 encoding of your downloaded AuthKey_*.p8 file."
+              exit 1
+            fi
             echo "configured=true" >> "$GITHUB_OUTPUT"
-            echo "key_path=$key_path" >> "$GITHUB_OUTPUT"
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
             echo "Missing APP_STORE_CONNECT_API_KEY_P8_BASE64, APP_STORE_CONNECT_KEY_ID, or APP_STORE_CONNECT_ISSUER_ID; skipping App Store Connect upload."
@@ -170,7 +189,6 @@ jobs:
         if: steps.asc.outputs.configured == 'true'
         working-directory: ios/App
         env:
-          ASC_KEY_PATH: ${{ steps.asc.outputs.key_path }}
           ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
         run: |
@@ -179,9 +197,9 @@ jobs:
             -exportPath "$RUNNER_TEMP/export" \
             -exportOptionsPlist ExportOptions.plist \
             -allowProvisioningUpdates \
-            -authenticationKeyPath "$ASC_KEY_PATH" \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+            -authenticationKeyPath "$RUNNER_TEMP/asc_auth_key.p8" \
+            -authenticationKeyID "$(printf '%s' "$ASC_KEY_ID" | tr -d '[:space:]')" \
+            -authenticationKeyIssuerID "$(printf '%s' "$ASC_ISSUER_ID" | tr -d '[:space:]')"
       - name: Remove temporary API key
         if: always()
-        run: rm -f "$RUNNER_TEMP"/AuthKey_*.p8
+        run: rm -f "$RUNNER_TEMP/asc_auth_key.p8" "$RUNNER_TEMP"/AuthKey_*.p8
